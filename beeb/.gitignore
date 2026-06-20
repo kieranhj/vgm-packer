@@ -1,0 +1,6 @@
+# build intermediates
+Player
+labels.txt
+labels_full.txt
+*.bin
+__pycache__/

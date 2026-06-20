@@ -667,11 +667,11 @@ Ordered by value-per-effort given §8.6. Items 1–2 need no external tools.
    This is the claim that P4 is both smaller *and* cheaper to decode — currently asserted, not
    measured on hardware/emulator.
 
-6. **Incremental-decode worst-case model for the single-bank regime (§12.4).** The unfinished
-   piece behind §12.4's recommendation: write the cycle-cost model (and ideally a 6502 prototype)
-   for a fixed incremental byte-aligned per-column decoder that yields exactly one value per
-   stream per frame, to *certify* the bounded worst case. This is the path for tunes that must
-   stay in one bank with no runtime decompression.
+6. **Incremental-decode worst-case model for the single-bank regime (§12.4).** ✅ **Done** —
+   6502 prototype in `beeb/` (player + packer + py65 verification). Decoder byte-exact in
+   simulation; **measured worst-case per-frame cost 3927 cycles = 9.8% of the 50 Hz budget**,
+   bounded and ~independent of match length. Remaining: confirm the sound-chip /WE strobe timing
+   on real hardware/emulator (the one thing the simulator can't exercise).
 
 ### 12.2 Rejected — do not revisit
 
@@ -697,6 +697,8 @@ Ordered by value-per-effort given §8.6. Items 1–2 need no external tools.
 - `measure_delta.py` — delta pre-coding harness (§8.9; needs ZX0 for its ZX0 columns).
 - `measure_patterns.py` — pattern-grid recovery harness (§8.10; pure Python).
 - `analyse_registers.py` — descriptive stats (§8.6–§8.8); the place to start new analysis.
+- `beeb/` — 6502 incremental-decode player prototype for §12.4 (BeebAsm + packer + py65 tests +
+  bootable `music.ssd`); see `beeb/README.md`.
 - `vgm/` — the 11-file corpus (committed); `vgm/_cache/` — artifacts (gitignored).
 - `docs/compression-analysis.md` — this document.
 
@@ -733,8 +735,14 @@ only is 4× too big (§8), and pattern recovery loses to VGC (§8.10). Those tun
 either the decompress-once regime (give up "no decompression"), multi-bank storage (give up
 "one bank"), or upstream re-authoring shorter / as native pattern data (§8.10).
 
-**Open work:** item 6 in §12.1 — the incremental-decode cycle-cost model / 6502 prototype to
-certify the worst-case bound.
+**Prototype built and certified (item 6, done).** `beeb/` contains a 6502 player for this
+regime (BeebAsm) plus a Python packer (`.vgi` = 11 per-register columns, each a byte-aligned
+LZSS over a 256-byte ring, 8-bit offsets, decoded one value per stream per frame). Verified in a
+py65 6502 simulation: the decoder is byte-exact vs the source, and the full SN76489 output
+matches. **Measured per-frame cost: min 2886 / mean 2924 / max 3927 cycles** — the worst frame is
+**9.8% of the 50 Hz budget** (40000 cyc @ 2 MHz), with a 1041-cycle spread, confirming the cost
+is bounded and ~independent of match length. A bootable disc (`beeb/music.ssd`, Ghost House,
+~51 s) is included; only the sound-chip /WE strobe timing remains to be confirmed on hardware.
 
 ---
 
