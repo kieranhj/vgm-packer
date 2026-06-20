@@ -184,6 +184,45 @@ self-check) and measured by `measure_proposal5.py`; kept for the record, not rec
 - **Arkos Tracker AKY** — sub-stream / no-LZ format, "very fast player, no buffer required" —
   same philosophy as Proposals 1–2.
 
+### 6.1 VGX — interleaved single-cursor LZ4 (a keeper trick)
+
+`vgm-player-bbc-vectoreyes` (a fork of the BBC player; experimental `vectoreyes/wip_temp`
+branch, `lib/vgcplayer_bass.asm`, commit `e98112a` "Support VGX file format ... interleaved
+LZ4 streams") implements a variant called **VGX**. Repo:
+https://github.com/simondotm/vgm-player-bbc (vectoreyes branch).
+
+**What it is:** *not* a new compression scheme — the **same 8 independently-LZ4-compressed
+de-interleaved streams as VGC**, with their compressed bytes **re-interleaved into one
+sequential stream in the exact order the decoder consumes them**. Because playback is fully
+deterministic, the encoder can simulate the decoder and know precisely when each stream will
+demand its next compressed byte, so it lays the bytes down in global consumption order. The
+decoder then needs only a **single, monotonically-advancing input cursor** shared across all
+8 streams (`zp_stream_src` is moved *out* of the per-stream context), and the 8 per-block
+headers / block-walking code are removed. Per-stream context drops 8→6 bytes; everything else
+is unchanged — still 8 LZ4 decoders, still 8× 256-byte windows (2 KB), still per-stream
+literal/match counts and window pointers context-switched every byte.
+
+**Assessment vs our requirements:**
+- ✅ **On the right axis** — keeps de-interleaving (the 99.4%-coverage lever, §8.6f).
+- ✅ **New capability: streamable input.** A single sequential cursor means the compressed
+  file no longer needs to be fully RAM-resident — it can be streamed from disk/tape/sideways
+  RAM, which the random-access 8-block VGC layout cannot. Context RAM also shrinks slightly.
+- 🟡 **Runtime cost: minor win.** Saves the source-pointer load/store per byte-fetch, but keeps
+  8 LZ4 decoders and **variable per-frame cost** — it does not deliver bounded/constant time.
+- ❌ **Ratio-neutral.** It re-orders the *same* LZ4 bytes (saves only ~the 8 block headers), so
+  it is byte-for-byte ≈ VGC — still LZ4 + 255-byte window, still ~2.2× larger than P4, and
+  still leaves the delta-coding (§8.6e) and wide-window (§8.6f) headroom untouched.
+- ⚠ This WIP branch also *removed* loop support, and the format is tightly coupled to the
+  decoder's exact byte-consumption order (a fetch-granularity change silently breaks files).
+
+**Why it matters to the successor:** the deterministic single-cursor interleave is the *correct*
+way to exploit "the 8 streams are in sync" (contrast Proposal 5, which tried to exploit the same
+determinism at the *compression* layer and lost 2.4–5.8×). It is orthogonal to the coder, so it
+**composes with a ZX0-class successor**: interleave 8 per-stream ZX0 streams the same way to get
+streamable-from-sequential-source decode *with* the stronger coder. This is relevant only to the
+**streamed regime** (tunes too large to decompress-once); for the P4 decompress-once path it is
+moot, since P4 is already a single stream.
+
 ---
 
 ## 7. Measurement methodology
@@ -505,6 +544,10 @@ Ordered by value-per-effort given §8.6. Items 1–2 need no external tools.
 
 4. **Prototype the successor coder (needs ZX0).** Per §8.6 conclusions: VGC's column layout +
    delta pre-coding + a ZX0-class wide-window coder per column. Measure against VGC and P4.
+   For the *streamed* (no decompress-once) variant, carry forward the **VGX single-cursor
+   interleave** (§6.1): interleave the 8 per-stream coded blocks in decoder-consumption order
+   so the input streams from one sequential cursor. Ratio-neutral but enables non-resident
+   compressed data and trims per-byte context-switching.
 
 5. **6502-side validation.** Prototype a ZX02 decompress-once loader + the 8-cursor RLE playback
    loop (Proposal 4's runtime), and measure real per-frame cycle cost vs the existing VGC decoder.
