@@ -117,6 +117,9 @@ def main():
                 if have_zx0:
                     zx = zx02_size(flat, os.path.join(cache, name + ".dz.flat.bin"), f)
                     zxd = zx02_size(flat_d, os.path.join(cache, name + ".dz.flatd.bin"), f)
+                    # guard against a truncated/0-byte cached .zx02 (e.g. from a
+                    # concurrent run sharing the cache) silently skewing totals.
+                    assert zx and zxd, "empty ZX0 output (corrupt cache?) - clear vgm/_cache/*.dz.*"
         except Exception as e:
             progress("      FAILED: %r" % e)
             rows.append((name, None, None, None, None))
