@@ -38,6 +38,15 @@ defeated by volume envelopes that change nearly every frame, so almost every fra
 to a raw literal. Per-column independence (VGC's 8 contexts) is doing real work that no shared
 frame-schedule can replace. See §5/§8.5/§9.
 
+Three further follow-ups, all measured: **per-section decompression is viable** (capping the
+window to one 16 KB bank costs only ~1.1 pp of LZ coverage, §8.7) — so P4 works on large tunes by
+sectioning them; **delta pre-coding is a dead end** (it *hurts* both LZ4 +11.5% and ZX0 +14.3%,
+§8.9); and **the tracker pattern grid cannot be recovered from the register stream** (§8.10 — no
+grid survives envelopes/transposition; loses to VGC by 1.73×). Finally, for the strict regime of
+**one 16 KB bank, no runtime decompression, and a known worst-case per-frame cost**, the answer is
+*not* ZX0/P4 but a fixed *incremental* byte-aligned decoder whose cost is bounded independently of
+match length — it fits ~9/11 corpus tunes; the two longest don't fit that regime at all (§12.4).
+
 ---
 
 ## 2. Problem statement
@@ -209,11 +218,15 @@ entropy floor, delta gain, LZ coverage and offset distribution, per-section cove
 column-major offset distribution) to guide successor design (see §8.6–§8.8). It is pure-Python
 with no external dependencies, so it runs in any environment.
 
+`measure_delta.py` measures delta pre-coding (§8.9) — baseline vs delta-coded columns under both
+LZ4 and ZX0. `measure_patterns.py` measures tracker-grid recovery (§8.10) — pure Python, no deps.
+
 Each metric runs independently (one broken column doesn't void the row) and prints its
 failure reason. All artifacts (`.vgc`, `.zx02`, intermediate blobs) are **cached** in
-`vgm/_cache/` and reused when newer than the source VGM, so re-runs are instant.
-`zx02.exe` lives at `../fdload_dfs/bin/zx02.exe` (ZX0 v2.2). (P5 is pure-Python and fast, so
-it is recomputed each run rather than cached.)
+`vgm/_cache/` and reused when newer than the source VGM, so re-runs are instant. ZX0 is located
+via `$ZX0_BIN` / `../ZX0/src/zx0` / `../fdload_dfs/bin/zx02.exe` / `PATH` (all ZX0 v2.2; see
+§12.0 to build it). (P5 and the pattern harness are pure-Python and fast, so they are recomputed
+each run rather than cached.)
 
 Test corpus: 11 real-world VGMs in `vgm/` (BBC + SMS PSG tunes, several taken from
 previously-shipped demos as a representative comparison).
@@ -382,15 +395,26 @@ unbounded P4 win.
 **Design conclusions:**
 1. **Keep de-interleaving** — it is the single biggest lever (99.4% coverage). No row-major,
    no whole-frame coupling.
-2. **Treat the three register classes separately** — noise (sparse), tones (medium, delta-able),
+2. **Treat the three register classes separately** — noise (sparse), tones (medium),
    volumes (volatile, dominate the budget).
-3. **Add delta pre-coding** for tone periods and volumes (~30% entropy cut, free).
-4. **Use a wide-window, strong coder** (ZX0-class) per column — the redundancy is long-range,
-   so the window/offset must reach thousands of frames.
+3. ~~Add delta pre-coding~~ — **measured, rejected (§8.9).** The order-0 entropy win does not
+   survive a real coder: delta makes both LZ4 (+11.5%) and ZX0 (+14.3%) *worse* by destroying
+   the literal runs they match on.
+4. **Use a wide-window, strong coder** (ZX0-class) over the de-interleaved layout — the
+   redundancy is long-range, so the window/offset must reach thousands of frames. **This is a
+   *storage* statement, not a runtime one:** ZX0's bit-level, variable-length decode is the
+   *worst* tool to run per-frame across 8 columns. Use it once, in the decompress-once regime
+   (P4) — store the columns **concatenated as a single ZX0 stream** (one context, shared
+   dictionary), decompress per bank into RAM, then play the flat cursor loop. "Per column" is
+   the data *layout*, not eight runtime coders.
 5. **RLE and entropy coding are secondary** — useful cheap passes, not the main event.
 
-The implied successor shape is *VGC's column layout + delta pre-coding + a ZX0-class wide-window
-coder*, with the RAM/decode-cost tension resolved by per-section (bank-sized) decompression.
+The implied successor shape is *VGC's column layout + a ZX0-class wide-window coder over the
+concatenated columns*, used **decompress-once per bank → flat cursor playback** so the strong
+coder never runs in the per-frame path. §8.7 shows bank-sized sections cost only ~1.1 pp of
+coverage, so this resolves the RAM/decode tension. (See §12.4 for the harder single-bank,
+no-decompress, bounded-worst-case regime, where ZX0 is *not* applicable and the answer is a
+fixed incremental byte-aligned coder instead.)
 
 ### 8.7 Per-section LZ coverage (is bank-capped P4 viable?)
 
@@ -440,6 +464,68 @@ and a kilobyte-plus window per stream — which reintroduces exactly the per-str
 cost VGC's small window was avoiding. This is the quantified tension that makes P4
 (decompress-once, wide window, trivial cursor playback) the better lever than a wider-window
 streamed VGC.
+
+### 8.9 Delta pre-coding (measured — rejected)
+
+§8.6(e) showed frame-delta cuts the *order-0* entropy of tone periods ~31% and volumes ~28%.
+Item 2 of the plan asked whether that survives into real compressed bytes once a
+back-referencing coder is applied. It does not — **delta makes both coders worse**, because it
+destroys the long literal runs that LZ/ZX0 match on (a held note is one long equal-byte run
+pre-delta and a run of zeros post-delta — both already collapse under LZ; delta just shuffles
+which one, while breaking *cross-instance* matches). Measured by `measure_delta.py` on the flat
+de-interleaved columns (tone + volume columns delta-coded; noise keeps its `0x0f` skip diff),
+under both per-stream LZ4 (255 window) and a single ZX0 stream (= P4f). Corpus totals:
+
+| coder | baseline | + delta | change |
+|---|--:|--:|--:|
+| LZ4 (255-window, per stream) | 114,458 | 127,656 | **+11.5%** |
+| ZX0 (single stream, = P4f) | 38,644 | 44,174 | **+14.3%** |
+
+Every file regresses under both coders (LZ4 +6…+24%, ZX0 +9…+32%); the sole near-neutral case
+is `intro_test` under LZ4 (0.99×). So the order-0 entropy win is a mirage once LZ/ZX0 is in
+play — **the successor should not delta-code.** (The format-aware "delta volumes before RLE"
+trick in §5 is likewise not worth it.) Note this was measured on the *flat* layout, not the
+RLE'd VGC streams: VGC's `rle2`/`rle` are value-format-specific — `rle2` asserts 10-bit tone
+words (lo ≤ 15, hi ≤ 63) and `rle` packs a 4-bit volume into the low nibble — and cannot ingest
+signed deltas without a redesigned RLE, so the flat layout is the clean place to isolate the
+question. The conclusion (delta hurts a real coder) is coder-level and carries over.
+
+### 8.10 Pattern-layer recovery (measured — rejected)
+
+These tunes were authored in a tracker as a **shared order list** (a fixed-length pattern grid,
+constant when the tempo is constant) with per-channel pattern content. That structure is lost on
+VGM export. Could it be **recovered** from the register stream — grouping the 11 columns back
+into the 4 SN76489 channels (ch0/1/2 = tone lo+hi+vol, ch3 = noise+vol) and deduping
+fixed-length, grid-aligned blocks? A pattern index has *bounded* decode cost (a pointer-jump at
+each grid boundary, no LZ window, no decompression), so if it worked it would fit the
+single-bank / known-worst-case regime ideally. Measured by `measure_patterns.py` (sweeps grid
+length `L` and frame phase). **It does not work:**
+
+- **No grid peak.** If a real tracker grid survived, mean per-channel block coverage would
+  *peak* at the musical `L`. Instead it **decays monotonically** with `L` — VE3: 55.6% at L=64
+  → 22.3% at 192 → 9.8% at 384; evil-influences: 41.5% → 16.9% → 10.6%. Best-phase alignment
+  (ruling out "patterns don't start at frame 0") doesn't change this (VE3 best-phase @256 =
+  21.9%, evil = 7.5%).
+- **Size-optimal `L` collapses to micro-blocks** (8–12 frames) — i.e. there is only short-range
+  repetition (which LZ/RLE already get), no musical-scale fixed grid. Per-channel best-`L`
+  values don't even agree across channels (VE3: `[8, 28, 8, 14]`), so there is no shared grid to
+  recover.
+- **It loses to VGC.** The best (size-optimal) pattern layer, LZ4'd, totals **1.73× VGC**, and
+  the large tunes (evil 40,978 B, VE3 23,897 B, Diagonals 19,770 B) **still don't fit a 16 KB
+  bank** — worse than VGC, not better. The whole-frame ("vertical", literal-tracker-pattern)
+  variant is far worse again (≈2× the per-channel size), reconfirming §8.6(f).
+
+The cause is the same trio that sank P5: **per-frame volume envelopes**, plus **pattern
+transposition** (the same phrase replayed at a different pitch → different tone periods → no
+byte match; pitch is logarithmic so it isn't even an additive delta) and per-instance
+**variation**. Two plays of the "same" pattern are simply not byte-identical at register level.
+The repetition is real (LZ gets 99.4%) but only reachable via *flexible-offset, flexible-length,
+partial* back-references — which is exactly the variable-cost decode we were trying to avoid.
+
+**Conclusion:** the pattern/order data cannot be reverse-engineered from the `.vgc` register
+stream. If a bounded-cost pattern layer is wanted, it must be taken **upstream** — from the
+tracker module (the native song/score) *before* VGM export, where the grid still exists
+losslessly — not recovered after the fact.
 
 ---
 
@@ -504,7 +590,15 @@ the whole corpus packs cleanly:
 - **Do not pursue Proposal 5** (frame-synchronised LZ): measured 2.4–5.8× worse than VGC
   (§8.5). Its constant-per-frame decode is already available, more cheaply, from P4's cursor
   playback — chase cheap decode via P4 + per-section decompression, not a new coder.
-- Carry forward the format-aware tricks (§5) and the noise `0x0f`/`0x08` markers regardless.
+- **Do not delta-code** (§8.9): it makes LZ4 (+11.5%) and ZX0 (+14.3%) worse.
+- **Do not try to recover the tracker pattern grid from the register stream** (§8.10): it is not
+  there to recover (envelopes/transposition/variation destroy exact repeats); take pattern data
+  from the upstream tracker module if a bounded-cost pattern layer is wanted.
+- **For a strict single 16 KB bank with bounded worst-case per-frame cost and no runtime
+  decompression** (§12.4): use a fixed *incremental* byte-aligned coder (VGC/LZ4/LZSA-class) that
+  yields one value per stream per frame — not ZX0, not P4. Fits ~9/11 corpus tunes; the two
+  longest don't fit that regime at all.
+- Carry forward the format-aware tricks (§5, minus delta) and the noise `0x0f`/`0x08` markers.
 
 ---
 
@@ -524,13 +618,19 @@ The repo is self-contained for *most* tooling, but **ZX0/ZX02 is not in this rep
   `../fdload_dfs/bin/zx02.exe` — a *Windows binary in a sibling repo* that will **not** exist on
   a fresh clone or a Linux cloud box. Its VGC / VGC+H columns still work (pure Python). To
   reproduce P4 elsewhere you must first obtain ZX0:
-  - `git clone https://github.com/einar-saukas/ZX0 && cd ZX0/src && make` (builds the `zx0`
-    CLI on Linux/macOS), then point the harness at it, **or** use the 6502-targeted ZX02
-    (https://github.com/einar-saukas/ZX02). Update the `ZX02 = ...` path near the top of
-    `measure_proposal2.py` accordingly. The flags used are just `-f <in> <out>` (and `-m <n>`
-    for the bounded-window experiments in §3/§8.5).
-  - All `zx02` outputs are cached under `vgm/_cache/` (gitignored), so once built, re-runs are
-    instant.
+  - The repo Makefile uses OpenWatcom (`owcc`); on a plain Linux box just compile the C sources
+    directly: `git clone https://github.com/einar-saukas/ZX0 && cd ZX0/src &&
+    cc -O2 -o zx0 zx0.c optimize.c compress.c memory.c`. This builds ZX0 v2.2 (the same compressor
+    the original `zx02.exe` was — flags `-f <in> <out>`, and `-m <n>` for the bounded-window
+    experiments in §3/§8.5).
+  - **`measure_proposal2.py` now finds ZX0 automatically:** `$ZX0_BIN`, then `../ZX0/src/zx0`,
+    then the old `../fdload_dfs/bin/zx02.exe`, then `zx0` on `PATH`. So once built as above, the
+    P4/P4f columns just work. Reproduced on Linux: VGC 19.6% and P2 77.8% match exactly; **P4
+    lands at 8.7% / 0.44×** (marginally better than the documented 9.0% — this ZX0 build is a
+    touch stronger than the original).
+  - All `zx0`/`zx02` outputs are cached under `vgm/_cache/` (gitignored), so once built, re-runs
+    are instant. (Don't run two cache-sharing harnesses concurrently — see the guard in
+    `measure_delta.py`.)
 
 ### 12.1 Ranked work items
 
@@ -544,12 +644,11 @@ Ordered by value-per-effort given §8.6. Items 1–2 need no external tools.
    viable, the redundancy is overwhelmingly intra-bank. This removes the RAM-regime objection to
    P4 for large tunes: section them.
 
-2. **Delta pre-coding measurement (no deps for the VGC side).** §8.6(e) shows delta cuts tone
-   entropy 31% / volume 28% at order-0. Confirm it survives into real compressed bytes: add a
-   delta pass (the dormant `VgmPacker.delta()`) before RLE/LZ in a *copy* of the pipeline and
-   re-measure VGC. Then (once ZX0 is available, §12.0) add a "P4-delta" column to
-   `measure_proposal2.py`. **Answers:** "should the successor delta-code tones/volumes before the
-   coder?" Watch the noise `0x0f`/`0x08` markers — delta interacts with the skip logic.
+2. **Delta pre-coding measurement.** ✅ **Done** — implemented in `measure_delta.py` and reported
+   in §8.9. **Finding:** delta *hurts* — LZ4 +11.5%, ZX0 +14.3% — because it destroys the literal
+   runs the coders match on. The successor should not delta-code. (Measured on the flat layout;
+   the RLE'd VGC path can't ingest signed deltas without a redesigned RLE, but the conclusion is
+   coder-level and carries over.)
 
 3. **Column-major offset histogram.** ✅ **Done** — implemented in `analyse_registers.py`
    (axis 8) and reported in §8.8. **Finding:** only ~48% of matched bytes fall within offset 255,
@@ -558,13 +657,21 @@ Ordered by value-per-effort given §8.6. Items 1–2 need no external tools.
    need a ≥16-bit offset field (and the RAM that implies), which is why P4's decompress-once
    wide-window regime is the better lever than a wider-window streamed VGC.
 
-4. **Prototype the successor coder (needs ZX0).** Per §8.6 conclusions: VGC's column layout +
-   delta pre-coding + a ZX0-class wide-window coder per column. Measure against VGC and P4.
+4. **Prototype the successor coder (ZX0 now buildable, §12.0).** Per the revised §8.6 conclusions:
+   VGC's column layout + a ZX0-class coder over the **concatenated** columns (no delta — §8.9),
+   used decompress-once. Measure against VGC and P4. (P4 already *is* essentially this; the open
+   piece is per-bank sectioning + a flat playback prototype.)
 
 5. **6502-side validation.** Prototype a ZX02 decompress-once loader + the 8-cursor RLE playback
    loop (Proposal 4's runtime), and measure real per-frame cycle cost vs the existing VGC decoder.
    This is the claim that P4 is both smaller *and* cheaper to decode — currently asserted, not
    measured on hardware/emulator.
+
+6. **Incremental-decode worst-case model for the single-bank regime (§12.4).** The unfinished
+   piece behind §12.4's recommendation: write the cycle-cost model (and ideally a 6502 prototype)
+   for a fixed incremental byte-aligned per-column decoder that yields exactly one value per
+   stream per frame, to *certify* the bounded worst case. This is the path for tunes that must
+   stay in one bank with no runtime decompression.
 
 ### 12.2 Rejected — do not revisit
 
@@ -574,17 +681,60 @@ Ordered by value-per-effort given §8.6. Items 1–2 need no external tools.
 - **`zx02 -m256` as a P4 ratio play:** forfeits the long-range matches that are the point
   (§8.6f); only ~19% of matches fall within 255 frames. It is a *streamed-regime* option (~0.85×
   VGC, single context), not a way to keep P4's 0.46×.
+- **Delta pre-coding (§8.9):** hurts both LZ4 (+11.5%) and ZX0 (+14.3%). Measured by
+  `measure_delta.py`; kept for the record.
+- **Recovering the tracker pattern grid from register data (§8.10):** not recoverable (no grid
+  peak; loses to VGC by 1.73×). Measured by `measure_patterns.py`. Pattern data must come from the
+  upstream tracker module, not the `.vgc` stream.
 
 ### 12.3 Repo map for a fresh start
 
 - `vgmpacker.py` — the current VGC packer (pipeline in `process()`; self-verifying encoders).
 - `modules/vgmparser.py` — VGM → distilled per-frame stream (`VgmStream.as_binary()`).
 - `modules/framelz.py` — Proposal 5 frame-LZ (rejected; reference only).
-- `measure_proposal2.py` — P2/P4/P4f/VGC/VGC+H harness (P4/P4f need ZX0, see §12.0).
+- `measure_proposal2.py` — P2/P4/P4f/VGC/VGC+H harness (auto-finds ZX0, see §12.0).
 - `measure_proposal5.py` — P5 harness.
+- `measure_delta.py` — delta pre-coding harness (§8.9; needs ZX0 for its ZX0 columns).
+- `measure_patterns.py` — pattern-grid recovery harness (§8.10; pure Python).
 - `analyse_registers.py` — descriptive stats (§8.6–§8.8); the place to start new analysis.
 - `vgm/` — the 11-file corpus (committed); `vgm/_cache/` — artifacts (gitignored).
 - `docs/compression-analysis.md` — this document.
+
+### 12.4 The single-bank, bounded-worst-case regime (no runtime decompression)
+
+A distinct target from P4's decompress-once regime, and the harder one: **code + compressed data
+in one 16 KB SWRAM bank, a known worst-case per-frame cost, no second bank, and no bulk
+decompression competing with timing-critical effects.** This rules out P4/P4f (need the
+decompressed working set resident *and* spend the decode at runtime) and any wide-window/ZX0
+streaming (bit-level variable decode; the windows alone exceed the bank).
+
+Key fact that makes it tractable: in a *streamed per-column* decoder you pull **one value per
+stream per frame**, so a long match never lands in a single frame — it costs one copy per frame
+as you consume it. With an *incremental* decoder (per-stream state: `literal_remaining` /
+`match_remaining` / `rle_remaining`), the worst case is bounded *independently of match/run
+lengths*:
+
+```
+worst_frame ≈ Σ over 8 streams ( token_parse + one_copy )
+```
+
+i.e. the pathological frame is "all 8 streams expire a run at once" → 8 × (read control byte,
+maybe a 1-byte offset, one copy) — a small fixed bound, not a function of the data. VGC's
+"variable per-frame cost" (§3) is therefore a *decoder-implementation* artifact (it expands whole
+LZ4 sequences on refill), **not** a format limit; a fixed incremental decoder over the existing
+VGC/LZ4 layout (or a byte-aligned LZSA-class one) certifies the bound. Workspace (~2 KB of ring
+buffers) lives in **main RAM**, not the bank.
+
+Sizing against the bank (using the measured VGC sizes as the streamed proxy, ~14 KB data budget
+after code): **9/11 corpus tunes fit** (intro 771 … Diagonals 11,568). Only the two longest —
+**evil 20,085 and VE3 18,528** — don't, and nothing in this regime saves them: a stronger byte
+coder forces bit-level variable decode (out), a wider window forces > bank RAM (out, §8.8), RLE-
+only is 4× too big (§8), and pattern recovery loses to VGC (§8.10). Those tunes genuinely need
+either the decompress-once regime (give up "no decompression"), multi-bank storage (give up
+"one bank"), or upstream re-authoring shorter / as native pattern data (§8.10).
+
+**Open work:** item 6 in §12.1 — the incremental-decode cycle-cost model / 6502 prototype to
+certify the worst-case bound.
 
 ---
 
