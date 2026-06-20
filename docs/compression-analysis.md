@@ -31,6 +31,13 @@ A pure run-length scheme with no back-references ("Proposal 2") is the cheapest 
 decode but trades **~4.0× larger** files than VGC — because the dominant redundancy in this
 music is *long-range pattern repetition* (LZ-type), not *consecutive-frame runs* (RLE-type).
 
+A scheme that exploits the 8 streams being frame-synchronised to collapse them to a single
+LZ context with matches measured in *frames* ("Proposal 5") was built and measured — and
+**loses to VGC by 2.4–5.8×**. It is a documented *negative* result: whole-frame matching is
+defeated by volume envelopes that change nearly every frame, so almost every frame degrades
+to a raw literal. Per-column independence (VGC's 8 contexts) is doing real work that no shared
+frame-schedule can replace. See §5/§8.5/§9.
+
 ---
 
 ## 2. Problem statement
@@ -133,6 +140,25 @@ A **P4f** variant ("flat") was also measured: ZX02 over the de-interleaved data 
 RLE. Slightly larger compressed, but the decompressed form is a flat frame-indexed array —
 even simpler playback (no run counters), at higher RAM cost.
 
+### Proposal 5 — Synchronised frame-LZ (one context, offsets in frame units)  ❌ measured, rejected
+The motivating insight: the 8 streams are advanced one value per frame and *repeat together*
+— a phrase recurring replays every register at once. So lay the data out **frame-major** as
+fixed-width `W`-byte records (3×2-byte tones + 1 noise + 2 nibble-packed volume bytes → W=9)
+and run a **single** LZ pass whose literals, match lengths and offsets are all in **frame
+units**. Decode needs one context: one offset, one match countdown, one ring of the last
+`window` frames (`window × W` bytes). Two attractive properties: per-frame cost is *constant*
+(exactly one frame consumed per frame — a long match never overruns the frame budget, VGC's
+main failure mode), and held frames fall out for free as offset-1 overlap matches.
+
+**It does not work** (§8.5). Forcing matches to be whole-frame is fatal: volume envelopes
+change almost every frame, so the full record rarely repeats and nearly every frame degrades
+to a raw `W`-byte literal. Result: 2.4–5.8× *larger* than VGC, worse even than RLE-only P2.
+Splitting volumes into a second context (tones+noise | volumes, "P5-2") roughly halves the
+size but still lands at 2.4× VGC. The experiment quantifies *why VGC de-interleaves*: per-column
+independence captures partial repeats (e.g. a held bass under a moving melody) that any shared
+frame-schedule structurally cannot. Implemented in `modules/framelz.py` (with a round-trip
+self-check) and measured by `measure_proposal5.py`; kept for the record, not recommended.
+
 ### Format-aware tricks (layer onto any proposal)
 - Keep `rle2` for 16-bit tones / split hi-lo (the tone high byte changes far less).
 - Delta-code volume columns before RLE (envelopes are smooth) — repo has an unused `delta()`.
@@ -172,10 +198,16 @@ own `split_raw`/`rle`/`rle2`/`diff`/`combine_registers` so every scheme sees ide
 - **VGC** — the real `.vgc` output (8× LZ4)
 - **VGC+H** — `.vgc -n` (LZ4 + Huffman)
 
+A second harness, `measure_proposal5.py` (reusing the same `distil`/`split_raw` helpers),
+measures Proposal 5: it transposes the de-interleaved registers to frame-major fixed-width
+records and runs the frame-LZ coder in `modules/framelz.py` at three windows, reporting the
+P5-1 / P5-2 variants alongside P4/VGC/VGC+H (see §8.5).
+
 Each metric runs independently (one broken column doesn't void the row) and prints its
 failure reason. All artifacts (`.vgc`, `.zx02`, intermediate blobs) are **cached** in
 `vgm/_cache/` and reused when newer than the source VGM, so re-runs are instant.
-`zx02.exe` lives at `../fdload_dfs/bin/zx02.exe` (ZX0 v2.2).
+`zx02.exe` lives at `../fdload_dfs/bin/zx02.exe` (ZX0 v2.2). (P5 is pure-Python and fast, so
+it is recomputed each run rather than cached.)
 
 Test corpus: 11 real-world VGMs in `vgm/` (BBC + SMS PSG tunes, several taken from
 previously-shipped demos as a representative comparison).
@@ -225,6 +257,36 @@ ne7-magic_beans ≈ 15.9 KB · BotB ≈ 19.0 KB · outro_test ≈ 22.9 KB · Dia
 main_test ≈ 41.0 KB · evil-influences ≈ 65.2 KB · VE3 ≈ 76.4 KB. This is the constraint
 that decides whether P4 is usable for a given tune.
 
+### 8.5 Proposal 5 (synchronised frame-LZ) results
+
+Measured by `measure_proposal5.py` (frame-LZ in `modules/framelz.py`, greedy parse,
+round-trip verified). `P5-1` = single 9-byte-record context; `P5-2` = split into
+tones+noise (7 B) and volumes (2 B), two contexts. Each at three back-reference windows:
+`w256` (ring ≈ 2.3 KB, ~VGC RAM regime), `w1820` (ring ≈ 16 KB, one sideways bank), `wInf`
+(unlimited). Totals over all 11 files, summed against the same VGC baseline (80,108 B):
+
+| scheme | RAM (ring) | bytes | vs VGC |
+|---|---|--:|--:|
+| P5-1 w256 | ~2.3 KB | 461,536 | 5.76× |
+| P5-1 w1820 | ~16 KB | 351,171 | 4.38× |
+| P5-1 wInf | full tune | 322,581 | 4.03× |
+| P5-2 w256 | ~2.3 KB | 296,330 | 3.70× |
+| P5-2 w1820 | ~16 KB | 219,706 | 2.74× |
+| P5-2 wInf | full tune | 190,463 | 2.38× |
+| *VGC (baseline)* | *2 KB* | *80,108* | *1.00×* |
+| *P4 (reference)* | *full tune* | *36,667* | *0.46×* |
+
+Every variant is larger than VGC — at matched RAM (`w256`) by 3.7–5.8×, and even with an
+unlimited window by 2.4–4.0×. At a 16 KB bank (`w1820`) it is still 2.7× VGC *and* uses 8×
+the RAM, i.e. strictly dominated by VGC on both axes; its only advantage is cheaper, constant
+per-frame decode — not worth that cost.
+
+Diagnostic detail: splitting volumes out (P5-1 → P5-2) nearly halves the size at every
+window, confirming the volume envelopes are what break whole-frame matching. The single
+biggest, most LZ-friendly losses are the loader/jingle tunes (`intro_test`: P5-2 wInf 3,025 B
+vs VGC 771 B), where long-range repetition exists but is split across frames the shared
+schedule can't match independently.
+
 ---
 
 ## 9. Interpretation
@@ -239,6 +301,14 @@ that decides whether P4 is usable for a given tune.
   stronger byte coder than LZ4," not "drop to RLE."** P4 also hints VGC itself could be
   improved by swapping LZ4 for a ZX0-class coder, though per-frame ZX0 streaming across 8
   columns reintroduces the context-juggling cost.
+- **P5's failure pins down VGC's load-bearing design choice.** Collapsing the 8 streams to a
+  single frame-synchronised context is intuitively appealing (one context, constant per-frame
+  decode), but it is 2.4–5.8× worse because *de-interleaving is the whole point*: per-column
+  independence captures partial repeats that a whole-frame schedule cannot. The redundancy is
+  long-range (so RLE-only P2 fails) *and* per-column-asynchronous (so frame-LZ P5 fails) — only
+  per-column LZ (VGC) or a strong byte coder over the de-interleaved layout (P4) captures both.
+  The cheap-decode goal is therefore better served by P4 + per-section decompression than by a
+  new compression scheme.
 
 ---
 
@@ -277,6 +347,9 @@ the whole corpus packs cleanly:
   coder," not "RLE-only." Reserve **Proposal 2** for cases where decode CPU is the hard
   constraint and the size penalty is acceptable.
 - **Consider Proposal 1** (change-mask) only for minimal-RAM or high-update-rate scenarios.
+- **Do not pursue Proposal 5** (frame-synchronised LZ): measured 2.4–5.8× worse than VGC
+  (§8.5). Its constant-per-frame decode is already available, more cheaply, from P4's cursor
+  playback — chase cheap decode via P4 + per-section decompression, not a new coder.
 - Carry forward the format-aware tricks (§5) and the noise `0x0f`/`0x08` markers regardless.
 
 ---
