@@ -130,9 +130,24 @@ class VgmPacker:
 					else:
 						if verbose:
 							print(" tone data on latched channel " + str(latched_channel))
-						registers[latched_channel*2+1] = d # we no longer do any masking here # d & 63 # tone data only contains 6 bits of info anyway, so no need for mask
-						if latched_channel == 3:
-							print("ERROR CHANNEL")
+						if latched_channel == -1:
+							# Data byte before any latch: nothing is selected yet,
+							# so it has no target. Ignoring it avoids the Python
+							# negative-index wrap (registers[-1] == registers[10],
+							# channel-3 volume) that wrote an out-of-range value
+							# and tripped the rle() assertion.
+							pass
+						elif latched_channel == 3:
+							# The noise channel (3) has no separate high-data
+							# byte: its value lives entirely in the latch byte,
+							# stored at registers[6]. A trailing data byte updates
+							# that noise register, masked like the latch path.
+							# Routing it to registers[3*2+1] (== registers[7])
+							# would corrupt channel-0 volume with an out-of-range
+							# value and later trip the rle() assertion.
+							registers[6] = d & register_mask
+						else:
+							registers[latched_channel*2+1] = d # we no longer do any masking here # d & 63 # tone data only contains 6 bits of info anyway, so no need for mask
 
 
 
