@@ -17,7 +17,24 @@ from vgmpacker import VgmPacker
 
 DEVNULL = open(os.devnull, "w")
 
-ZX02 = os.path.join("..", "fdload_dfs", "bin", "zx02.exe")
+# ZX0 v2.2 compressor (the doc's "zx02.exe" is ZX0 v2.2). Resolve from the
+# ZX0_BIN env var, else the first existing candidate. On a fresh clone, build it
+# with: git clone https://github.com/einar-saukas/ZX0 && cd ZX0/src &&
+#       cc -O2 -o zx0 zx0.c optimize.c compress.c memory.c
+# Flags are identical to the original Windows binary: -f <in> <out>.
+def _find_zx0():
+    cand = [
+        os.environ.get("ZX0_BIN"),
+        os.path.join("..", "ZX0", "src", "zx0"),
+        os.path.join("..", "fdload_dfs", "bin", "zx02.exe"),
+        "zx0",
+    ]
+    for c in cand:
+        if c and (os.path.exists(c) or os.path.dirname(c) == ""):
+            return c
+    return cand[0]
+
+ZX02 = _find_zx0()
 
 @contextlib.contextmanager
 def quiet():
