@@ -28,11 +28,6 @@ from collections import defaultdict
 #
 # TODO: add a peek table
 
-if sys.version_info[0] > 2:
-    print("Python 2 only")
-    sys.exit()
-
-
 class Huffman:
 
     MAX_CODE_BIT_LENGTH = 20    # change this if you need to check the codes are within a specific bit length range
@@ -58,7 +53,7 @@ class Huffman:
         
 
     def buildTree(self):
-        self.heap = [[v, k] for k, v in self.frequency.iteritems()]
+        self.heap = [[v, k] for k, v in self.frequency.items()] # Changed: iteritems -> items
         heapify(self.heap)
         while len(self.heap) > 1:
             left, right = heappop(self.heap), heappop(self.heap)
@@ -67,7 +62,7 @@ class Huffman:
     def buildKey(self, root=None, code=''):
         if root is None:
             self.buildKey(self.heap[0])
-            for k,v in self.key.iteritems():
+            for k,v in self.key.items(): # Changed: iteritems -> items
                 self.rKey[v] = k
         elif len(root) == 2:
             self.key[root[1]] = code
