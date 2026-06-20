@@ -53,11 +53,23 @@ class Huffman:
         
 
     def buildTree(self):
-        self.heap = [[v, k] for k, v in self.frequency.items()] # Changed: iteritems -> items
-        heapify(self.heap)
-        while len(self.heap) > 1:
-            left, right = heappop(self.heap), heappop(self.heap)
-            heappush(self.heap, [left[0] + right[0], left, right])
+        # Heap entries are (priority, tiebreak, node) tuples. The tiebreak is a
+        # unique counter so equal-frequency entries never fall through to
+        # comparing the node payloads (Python 3 can't order an int symbol
+        # against a list node). The node itself keeps its original shape
+        # ([freq, symbol] leaf / [freq, left, right] internal) so buildKey is
+        # unchanged.
+        counter = 0
+        heap = []
+        for k, v in self.frequency.items(): # Changed: iteritems -> items
+            heappush(heap, (v, counter, [v, k]))
+            counter += 1
+        while len(heap) > 1:
+            left, right = heappop(heap)[2], heappop(heap)[2]
+            node = [left[0] + right[0], left, right]
+            heappush(heap, (node[0], counter, node))
+            counter += 1
+        self.heap = [heap[0][2]]
 
     def buildKey(self, root=None, code=''):
         if root is None:
