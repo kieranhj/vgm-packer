@@ -203,6 +203,11 @@ measures Proposal 5: it transposes the de-interleaved registers to frame-major f
 records and runs the frame-LZ coder in `modules/framelz.py` at three windows, reporting the
 P5-1 / P5-2 variants alongside P4/VGC/VGC+H (see §8.5).
 
+A third tool, `analyse_registers.py`, does no compression — it computes descriptive
+statistics on the de-interleaved register columns (volatility, change taxonomy, run lengths,
+entropy floor, delta gain, LZ coverage and offset distribution) to guide successor design
+(see §8.6). It is pure-Python with no external dependencies, so it runs in any environment.
+
 Each metric runs independently (one broken column doesn't void the row) and prints its
 failure reason. All artifacts (`.vgc`, `.zx02`, intermediate blobs) are **cached** in
 `vgm/_cache/` and reused when newer than the source VGM, so re-runs are instant.
@@ -287,6 +292,103 @@ biggest, most LZ-friendly losses are the loader/jingle tunes (`intro_test`: P5-2
 vs VGC 771 B), where long-range repetition exists but is split across frames the shared
 schedule can't match independently.
 
+### 8.6 Register-data analysis (successor design guidance)
+
+`analyse_registers.py` dissects the de-interleaved register columns across six axes to
+guide a VGC successor. All figures are corpus totals over the 11 files (74,052 frames),
+pooled (not mean-of-means), computed on the same `split_raw` columns the packer uses.
+
+**(a) Volatility — % of frames where each register changes:**
+
+| t0lo | t0hi | t1lo | t1hi | t2lo | t2hi | nois | vol0 | vol1 | vol2 | vol3 |
+|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|
+| 39% | 38% | 37% | 32% | 33% | 25% | **12%** | 47% | 43% | 17% | 44% |
+
+Noise is near-static; volumes are the most volatile. The three register classes behave
+differently enough to warrant different treatment. (The README's "tone high byte changes
+far less" holds only weakly — t*hi is only slightly calmer than t*lo.)
+
+**(b) Frame change taxonomy — what changes each frame** (the P5 post-mortem):
+
+| both | tone-only | vol-only | idle |
+|--:|--:|--:|--:|
+| 59.1% | 11.1% | 20.1% | 9.7% |
+
+**79% of frames change a volume** (both + vol-only). This is *why* whole-frame matching
+(P5) fails: a frame rarely recurs exactly because volumes keep moving — yet those same
+frames are trivial for per-column LZ, which ignores the unrelated volume churn. It varies
+widely by tune (VE3 88.7% both; `intro_test` 53% tone-only; Collision 43% idle).
+
+**(c) Run lengths — mean consecutive-equal run per register (pooled):**
+
+| t0lo | t0hi | t1lo | t1hi | t2lo | t2hi | nois | vol0 | vol1 | vol2 | vol3 |
+|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|
+| 2.5 | 2.7 | 2.7 | 3.1 | 3.0 | 3.9 | **8.3** | 2.1 | 2.3 | 5.7 | 2.3 |
+
+Mostly short (2–4). RLE earns its keep as a cheap pre-pass + skip-marker mechanism, not as
+the main compressor — consistent with P2's poor standalone ratio.
+
+**(d) Entropy floor (order-0, no LZ), corpus bytes:**
+
+| measure | bytes | % of raw |
+|---|--:|--:|
+| raw (11 B/frame) | 814,572 | 100% |
+| per-column order-0 floor | 285,131 | 35.0% |
+| joint per-frame order-0 floor | 102,777 | 12.6% |
+| distinct 9-byte frames | 33,419 / 74,052 | 45.1% |
+
+Joint ≪ summed-marginals confirms strong inter-register correlation, but the joint alphabet
+is huge (45% of frames are distinct), so that correlation is only realisable via
+back-references — **not** a static per-frame table (a frame dictionary would dwarf the data).
+The cheap, achievable no-LZ floor is the **per-column 35%** (≈ what an entropy coder alone
+buys; close to what VGC+Huffman achieves). Entropy coding is a secondary lever; LZ is primary.
+
+**(e) Delta coding — order-0 entropy (bits/symbol), raw vs frame-delta:**
+
+| stream | raw H | delta H | reduction |
+|---|--:|--:|--:|
+| tone period | 4.45 | **3.09** | 31% |
+| volume | 2.50 | **1.81** | 28% |
+
+Delta-coding tone periods and volume columns before the coder is a real, currently-unused win
+(the repo has a dormant `delta()`). Low-risk headroom for the successor.
+
+**(f) LZ potential — match coverage and offset distribution** (greedy, unbounded window):
+
+| axis | coverage (fraction expressible as a back-reference) |
+|---|--:|
+| **column-major** (8 logical streams) | **99.4%** |
+| frame-major (whole 9-B frame) | 54.9% |
+
+This 99.4% vs 54.9% gap is the headline of the whole study: **de-interleaving is
+load-bearing.** Frame-major coupling throws away ~45% of reachable redundancy — the exact
+ceiling P5 hit.
+
+Frame-major match **offset distribution** (% of matched frames by back-distance):
+
+| 1 | 2–15 | 16–63 | 64–255 | 256–1k | 1k–4k | 4k+ |
+|--:|--:|--:|--:|--:|--:|--:|
+| 9.0% | 3.9% | 6.6% | 22.9% | 34.6% | 15.4% | 7.6% |
+
+Only ~9% are offset-1 (held frames; RLE territory) and only ~19% fall within 255. **Half the
+matches live at 256–4k frames back** — long-range phrase repetition. A successor's offset
+coder must reach thousands of frames, which means either the decompress-once regime (P4) or a
+genuinely large window. This is the same fact that made `zx02 -m256` cost ~2× and made
+unbounded P4 win.
+
+**Design conclusions:**
+1. **Keep de-interleaving** — it is the single biggest lever (99.4% coverage). No row-major,
+   no whole-frame coupling.
+2. **Treat the three register classes separately** — noise (sparse), tones (medium, delta-able),
+   volumes (volatile, dominate the budget).
+3. **Add delta pre-coding** for tone periods and volumes (~30% entropy cut, free).
+4. **Use a wide-window, strong coder** (ZX0-class) per column — the redundancy is long-range,
+   so the window/offset must reach thousands of frames.
+5. **RLE and entropy coding are secondary** — useful cheap passes, not the main event.
+
+The implied successor shape is *VGC's column layout + delta pre-coding + a ZX0-class wide-window
+coder*, with the RAM/decode-cost tension resolved by per-section (bank-sized) decompression.
+
 ---
 
 ## 9. Interpretation
@@ -354,13 +456,80 @@ the whole corpus packs cleanly:
 
 ---
 
-## 12. Next steps / open questions
+## 12. Next steps / continuation plan
 
-1. Prototype the 6502 side: a ZX02 decompress-once loader + an 8-cursor RLE playback routine;
-   measure actual per-frame cycle cost vs the existing VGC decoder.
-2. Evaluate per-section / loop-point decompression so Proposal 4 scales to large tunes within
-   limited RAM.
-3. Explore swapping LZ4→ZX0-class coding inside a streamed format for the no-RAM case.
+This section is written to be picked up cold (e.g. on the claude.ai/code web app on a fresh
+clone), without the local laptop state. Read §8.6 first — it sets the design direction.
+
+### 12.0 Environment note (IMPORTANT — read before running anything)
+
+The repo is self-contained for *most* tooling, but **ZX0/ZX02 is not in this repo**:
+
+- `analyse_registers.py`, `measure_proposal5.py`, and `vgmpacker.py` itself are **pure Python 3,
+  no external deps** — they run anywhere, including the web app, against the committed corpus in
+  `vgm/`. Start here.
+- `measure_proposal2.py`'s **P4 / P4f columns shell out to `zx02.exe`** at
+  `../fdload_dfs/bin/zx02.exe` — a *Windows binary in a sibling repo* that will **not** exist on
+  a fresh clone or a Linux cloud box. Its VGC / VGC+H columns still work (pure Python). To
+  reproduce P4 elsewhere you must first obtain ZX0:
+  - `git clone https://github.com/einar-saukas/ZX0 && cd ZX0/src && make` (builds the `zx0`
+    CLI on Linux/macOS), then point the harness at it, **or** use the 6502-targeted ZX02
+    (https://github.com/einar-saukas/ZX02). Update the `ZX02 = ...` path near the top of
+    `measure_proposal2.py` accordingly. The flags used are just `-f <in> <out>` (and `-m <n>`
+    for the bounded-window experiments in §3/§8.5).
+  - All `zx02` outputs are cached under `vgm/_cache/` (gitignored), so once built, re-runs are
+    instant.
+
+### 12.1 Ranked work items
+
+Ordered by value-per-effort given §8.6. Items 1–2 need no external tools.
+
+1. **Per-section LZ coverage sweep (no deps).** Extend `analyse_registers.py` to slide a
+   bank-sized window (e.g. 1820 frames ≈ 16 KB at 9 B/frame) over the *column-major* streams and
+   report coverage vs the unbounded 99.4%. This sizes the per-section P4 idea precisely: it tells
+   you how much ratio you lose by capping the window to one sideways-RAM bank, per tune. Expected
+   to land between VGC and unbounded-P4. **Answers:** "is per-section decompression viable, or
+   does bank-capping the window cost too much?"
+
+2. **Delta pre-coding measurement (no deps for the VGC side).** §8.6(e) shows delta cuts tone
+   entropy 31% / volume 28% at order-0. Confirm it survives into real compressed bytes: add a
+   delta pass (the dormant `VgmPacker.delta()`) before RLE/LZ in a *copy* of the pipeline and
+   re-measure VGC. Then (once ZX0 is available, §12.0) add a "P4-delta" column to
+   `measure_proposal2.py`. **Answers:** "should the successor delta-code tones/volumes before the
+   coder?" Watch the noise `0x0f`/`0x08` markers — delta interacts with the skip logic.
+
+3. **Column-major offset histogram.** `analyse_registers.py` only charts the *frame-major* offset
+   distribution (§8.6f). Add the per-column one (offsets in each stream's own byte units) to size
+   the window / offset-field width for an in-place *streamed* successor per stream. **Answers:**
+   "what offset width must a streamed per-column coder encode?"
+
+4. **Prototype the successor coder (needs ZX0).** Per §8.6 conclusions: VGC's column layout +
+   delta pre-coding + a ZX0-class wide-window coder per column. Measure against VGC and P4.
+
+5. **6502-side validation.** Prototype a ZX02 decompress-once loader + the 8-cursor RLE playback
+   loop (Proposal 4's runtime), and measure real per-frame cycle cost vs the existing VGC decoder.
+   This is the claim that P4 is both smaller *and* cheaper to decode — currently asserted, not
+   measured on hardware/emulator.
+
+### 12.2 Rejected — do not revisit
+
+- **Proposal 5 (frame-synchronised LZ):** 2.4–5.8× worse than VGC (§8.5); de-interleaving is
+  load-bearing (§8.6f, 99.4% vs 54.9% coverage). Code kept in `modules/framelz.py` for the record.
+- **Proposal 3 (single-stream interleaved LZ):** throws away de-interleaving — same root flaw.
+- **`zx02 -m256` as a P4 ratio play:** forfeits the long-range matches that are the point
+  (§8.6f); only ~19% of matches fall within 255 frames. It is a *streamed-regime* option (~0.85×
+  VGC, single context), not a way to keep P4's 0.46×.
+
+### 12.3 Repo map for a fresh start
+
+- `vgmpacker.py` — the current VGC packer (pipeline in `process()`; self-verifying encoders).
+- `modules/vgmparser.py` — VGM → distilled per-frame stream (`VgmStream.as_binary()`).
+- `modules/framelz.py` — Proposal 5 frame-LZ (rejected; reference only).
+- `measure_proposal2.py` — P2/P4/P4f/VGC/VGC+H harness (P4/P4f need ZX0, see §12.0).
+- `measure_proposal5.py` — P5 harness.
+- `analyse_registers.py` — descriptive stats (§8.6); the place to start new analysis.
+- `vgm/` — the 11-file corpus (committed); `vgm/_cache/` — artifacts (gitignored).
+- `docs/compression-analysis.md` — this document.
 
 ---
 
