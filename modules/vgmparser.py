@@ -733,9 +733,10 @@ class VgmStream:
 		author = self.gd3_data['artist_eng'].decode("utf_16")
 		author = author.encode('ascii', 'ignore')
 
-		# use filename if no author listed
+		# use filename if no author listed (encode to bytes to match the
+		# GD3 path above, otherwise extend() rejects the str)
 		if len(author) == 0:
-			author = basename(self.vgm_filename)
+			author = basename(self.vgm_filename).encode('ascii', 'ignore')
 
 		if len(author) > 254:
 			author = author[:254]
