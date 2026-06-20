@@ -437,7 +437,7 @@ class LZ4():
 
         # very long matches need extra bytes for encoding match length
         if (length >= 19):
-          currentCost += 1 + (length - 19) / 255
+          currentCost += 1 + (length - 19) // 255 # Changed: integer division
         
         # better choice ?
         if (currentCost <= minCost):
@@ -464,7 +464,7 @@ class LZ4():
           # assume that longest match is always the best match
           # however, this assumption might not be optimal
           bestLength = match.length
-          minCost    = cost[i + match.length] + 1 + self.DistanceByteSize + 1 + (match.length - 19) / 255
+          minCost    = cost[i + match.length] + 1 + self.DistanceByteSize + 1 + (match.length - 19) // 255 # Changed: integer division
           break
         
       
@@ -495,10 +495,7 @@ class LZ4():
 
     # write a byte array to the output buffer, data can be a byte or a byte array
     def sendBytes(data):
-      if len(data) == 1:
-        outputData.append(data)
-      else:
-        outputData.extend(data)
+      outputData.extend(data) # Changed: extend works for both single bytes and arrays
 
     # read upto count bytes from the input buffer, returned in a new bytearray 'buffer'. Returns an empty buffer if no more data available.
     def getBytes(count):
@@ -849,15 +846,15 @@ class LZ4():
     # flags
     # (7-6) FieldName	Version (5)	B.Indep (4)	B.Checksum (3)	C.Size (2)	C.Checksum (1) Reserved (0)	DictID
     flags = 1 << 6 # Version, dependent blocks, no block checksum, no size, no content checksum, no dict ID 
-    outputBuffer.append( struct.pack('B', flags) )
+    outputBuffer.append( flags ) # Changed: bytearray.append takes int
 
     # max blocksize
     maxBlockSizeId = self.MaxBlockSizeId << 4
-    outputBuffer.append( struct.pack('B', maxBlockSizeId) )
-    
+    outputBuffer.append( maxBlockSizeId ) # Changed: bytearray.append takes int
+
     # header checksum (precomputed)
     checksum = 0xDF
-    outputBuffer.append( struct.pack('B', checksum) )
+    outputBuffer.append( checksum ) # Changed: bytearray.append takes int
 
     # reset stats for each frame
     # (can be manually called per-block also if desired)
