@@ -205,8 +205,9 @@ P5-1 / P5-2 variants alongside P4/VGC/VGC+H (see §8.5).
 
 A third tool, `analyse_registers.py`, does no compression — it computes descriptive
 statistics on the de-interleaved register columns (volatility, change taxonomy, run lengths,
-entropy floor, delta gain, LZ coverage and offset distribution) to guide successor design
-(see §8.6). It is pure-Python with no external dependencies, so it runs in any environment.
+entropy floor, delta gain, LZ coverage and offset distribution, per-section coverage, and the
+column-major offset distribution) to guide successor design (see §8.6–§8.8). It is pure-Python
+with no external dependencies, so it runs in any environment.
 
 Each metric runs independently (one broken column doesn't void the row) and prints its
 failure reason. All artifacts (`.vgc`, `.zx02`, intermediate blobs) are **cached** in
@@ -294,9 +295,11 @@ schedule can't match independently.
 
 ### 8.6 Register-data analysis (successor design guidance)
 
-`analyse_registers.py` dissects the de-interleaved register columns across six axes to
-guide a VGC successor. All figures are corpus totals over the 11 files (74,052 frames),
-pooled (not mean-of-means), computed on the same `split_raw` columns the packer uses.
+`analyse_registers.py` dissects the de-interleaved register columns across eight axes to
+guide a VGC successor (the first six here, plus per-section coverage in §8.7 and the
+column-major offset distribution in §8.8). All figures are corpus totals over the 11 files
+(74,052 frames), pooled (not mean-of-means), computed on the same `split_raw` columns the
+packer uses.
 
 **(a) Volatility — % of frames where each register changes:**
 
@@ -388,6 +391,55 @@ unbounded P4 win.
 
 The implied successor shape is *VGC's column layout + delta pre-coding + a ZX0-class wide-window
 coder*, with the RAM/decode-cost tension resolved by per-section (bank-sized) decompression.
+
+### 8.7 Per-section LZ coverage (is bank-capped P4 viable?)
+
+§8.6(f) measured LZ coverage with an *unbounded* window (99.4% column-major). But the P4
+"decompress-once" regime only stays usable on large tunes if you can decompress **one
+bank-sized section at a time** — which caps how far back a match may reach. This axis
+hard-partitions each of the 8 column-major streams into sections of `N` frames (so **no match
+crosses a section boundary**, exactly as if each section were decompressed independently) and
+runs unbounded LZ *within* each section. A 16 KB BBC sideways-RAM bank holds ≈1820 frames at
+9 B/frame; we bracket half-, one- and two-bank sections. Corpus totals:
+
+| section (frames) | ≈ KB/bank | column-major coverage |
+|---|--:|--:|
+| 455 | 4.0 | 96.1% |
+| 910 | 8.0 | 97.5% |
+| **1820 (one bank)** | **16.0** | **98.3%** |
+| 3640 | 32.0 | 98.8% |
+| unbounded | full tune | 99.4% |
+
+**Per-section decompression is viable.** Capping the window to one 16 KB bank costs only
+~1.1 percentage points of coverage (98.3% vs 99.4%) — the redundancy in this music is
+overwhelmingly *intra-bank*, not whole-tune-spanning. Even a 4 KB section keeps 96.1%. So a
+large tune (VE3, evil-influences) can be split into bank-sized sections, each ZX0'd and
+decompressed on demand, with negligible ratio loss versus a single unbounded stream. This
+removes the only objection to P4 (the RAM regime, §1/§4) for tunes that don't fit decompressed:
+section them. The decode loop is unchanged (P2's cursors); only a per-section reload is added.
+
+### 8.8 Column-major match offset distribution
+
+§8.6(f) charted the *frame-major* offset spread. This is the **column-major** equivalent —
+where the VGC-axis matches actually come from, measured in each stream's own byte units (tone
+streams are 2 B/frame, noise + the four volumes are 1 B/frame). It sizes the offset-field width
+a *streamed* per-column successor coder must encode.
+
+| 1 | 2–15 | 16–63 | 64–255 | 256–1k | 1k–4k | 4k+ |
+|--:|--:|--:|--:|--:|--:|--:|
+| 9.0% | 8.1% | 9.2% | 21.5% | 28.8% | 15.9% | 7.6% |
+
+Only **~48% of matched bytes fall within offset 255** (1 + 2–15 + 16–63 + 64–255). The
+remaining ~52% reach 256 bytes – thousands back. **This indicts VGC's window directly:** VGC
+uses 8-bit (1-byte) offsets — a 255-byte window — so it can express *under half* of the
+per-column redundancy that's actually there. That single design choice (chosen to keep the
+6502 decoder's per-stream buffer at 256 bytes) is the biggest gap between VGC and a ZX0-class
+coder over the same de-interleaved layout (P4's 0.46×). A streamed per-column successor that
+wanted to close that gap *without* the decompress-once regime would need a ≥16-bit offset field
+and a kilobyte-plus window per stream — which reintroduces exactly the per-stream RAM/context
+cost VGC's small window was avoiding. This is the quantified tension that makes P4
+(decompress-once, wide window, trivial cursor playback) the better lever than a wider-window
+streamed VGC.
 
 ---
 
@@ -484,12 +536,13 @@ The repo is self-contained for *most* tooling, but **ZX0/ZX02 is not in this rep
 
 Ordered by value-per-effort given §8.6. Items 1–2 need no external tools.
 
-1. **Per-section LZ coverage sweep (no deps).** Extend `analyse_registers.py` to slide a
-   bank-sized window (e.g. 1820 frames ≈ 16 KB at 9 B/frame) over the *column-major* streams and
-   report coverage vs the unbounded 99.4%. This sizes the per-section P4 idea precisely: it tells
-   you how much ratio you lose by capping the window to one sideways-RAM bank, per tune. Expected
-   to land between VGC and unbounded-P4. **Answers:** "is per-section decompression viable, or
-   does bank-capping the window cost too much?"
+1. **Per-section LZ coverage sweep (no deps).** ✅ **Done** — implemented in
+   `analyse_registers.py` (axis 7) and reported in §8.7. It hard-partitions each column-major
+   stream into sections of `N` frames (no cross-section matches) and runs unbounded LZ within
+   each section, bracketing half-/one-/two-bank sizes. **Finding:** capping to one 16 KB bank
+   costs only ~1.1 pp of coverage (98.3% vs 99.4% unbounded) — per-section decompression is
+   viable, the redundancy is overwhelmingly intra-bank. This removes the RAM-regime objection to
+   P4 for large tunes: section them.
 
 2. **Delta pre-coding measurement (no deps for the VGC side).** §8.6(e) shows delta cuts tone
    entropy 31% / volume 28% at order-0. Confirm it survives into real compressed bytes: add a
@@ -498,10 +551,12 @@ Ordered by value-per-effort given §8.6. Items 1–2 need no external tools.
    `measure_proposal2.py`. **Answers:** "should the successor delta-code tones/volumes before the
    coder?" Watch the noise `0x0f`/`0x08` markers — delta interacts with the skip logic.
 
-3. **Column-major offset histogram.** `analyse_registers.py` only charts the *frame-major* offset
-   distribution (§8.6f). Add the per-column one (offsets in each stream's own byte units) to size
-   the window / offset-field width for an in-place *streamed* successor per stream. **Answers:**
-   "what offset width must a streamed per-column coder encode?"
+3. **Column-major offset histogram.** ✅ **Done** — implemented in `analyse_registers.py`
+   (axis 8) and reported in §8.8. **Finding:** only ~48% of matched bytes fall within offset 255,
+   so VGC's 1-byte offset (255-byte window) can express under half the per-column redundancy that
+   exists; ~52% of matches reach 256 B – thousands back. A streamed per-column successor would
+   need a ≥16-bit offset field (and the RAM that implies), which is why P4's decompress-once
+   wide-window regime is the better lever than a wider-window streamed VGC.
 
 4. **Prototype the successor coder (needs ZX0).** Per §8.6 conclusions: VGC's column layout +
    delta pre-coding + a ZX0-class wide-window coder per column. Measure against VGC and P4.
@@ -527,7 +582,7 @@ Ordered by value-per-effort given §8.6. Items 1–2 need no external tools.
 - `modules/framelz.py` — Proposal 5 frame-LZ (rejected; reference only).
 - `measure_proposal2.py` — P2/P4/P4f/VGC/VGC+H harness (P4/P4f need ZX0, see §12.0).
 - `measure_proposal5.py` — P5 harness.
-- `analyse_registers.py` — descriptive stats (§8.6); the place to start new analysis.
+- `analyse_registers.py` — descriptive stats (§8.6–§8.8); the place to start new analysis.
 - `vgm/` — the 11-file corpus (committed); `vgm/_cache/` — artifacts (gitignored).
 - `docs/compression-analysis.md` — this document.
 

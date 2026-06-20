@@ -35,6 +35,17 @@ OFFSET_BUCKETS = [(1, 1), (2, 15), (16, 63), (64, 255),
                   (256, 1023), (1024, 4095), (4096, 1 << 30)]
 BUCKET_LABELS = ["1", "2-15", "16-63", "64-255", "256-1k", "1k-4k", "4k+"]
 
+# Per-section coverage sweep (axis 7): hard-partition each column into sections
+# of N frames and measure LZ coverage within each section in isolation. Models
+# per-section P4 decompression where each ~bank-sized chunk is decompressed
+# independently, so no match may cross a section boundary. A 16 KB BBC sideways
+# RAM bank holds ~1820 frames at 9 B/frame; we bracket half-, one- and two-bank.
+SECTION_FRAMES = [455, 910, 1820, 3640]
+
+# bytes-per-frame of each of the 8 logical column-major streams (3 x 16-bit
+# tone = 2 B/frame, noise + 4 volumes = 1 B/frame), used to size sections.
+LOGICAL_BPF = [2, 2, 2, 1, 1, 1, 1, 1]
+
 
 # ----------------------------------------------------------------------------
 # helpers
@@ -198,11 +209,33 @@ def analyse(packer, data_block):
         bytes(cols[7]), bytes(cols[8]), bytes(cols[9]), bytes(cols[10]),
     ]
     col_n = col_m = 0
+    col_hist = {b: 0 for b in OFFSET_BUCKETS}
     for s in logical:
-        n, m, _ = lz_scan(list(s), window=None, min_match=2, khash=2)
+        n, m, h = lz_scan(list(s), window=None, min_match=2, khash=2)
         col_n += n
         col_m += m
+        for b in OFFSET_BUCKETS:
+            col_hist[b] += h[b]
     r["col_cov"] = col_m / max(1, col_n)
+    r["col_total"] = col_n
+    r["col_matched"] = col_m
+    r["col_hist"] = col_hist
+
+    # 6b. per-section coverage: hard-partition each column into sections of N
+    # frames (no cross-section matches), unbounded LZ within each section. This
+    # sizes the per-section P4 idea - how much of the unbounded 99.4% survives
+    # when the back-reference window is capped to one decompressed bank.
+    r["sec_cov"] = {}
+    for sf in SECTION_FRAMES:
+        sm = sn = 0
+        for s, bpf in zip(logical, LOGICAL_BPF):
+            seclen = sf * bpf
+            for off in range(0, len(s), seclen):
+                n, m, _ = lz_scan(list(s[off:off + seclen]),
+                                  window=None, min_match=2, khash=2)
+                sn += n
+                sm += m
+        r["sec_cov"][sf] = (sm, sn)
 
     fn, fm, fhist = lz_scan(frames9, window=None, min_match=1, khash=1)
     r["frame_cov"] = fm / max(1, fn)
@@ -328,6 +361,44 @@ def main():
     print("    " + "  ".join("%6.1f%%" % (100 * agg[b] / max(1, tm)) for b in OFFSET_BUCKETS))
     print("  near offsets (1) = held frames (RLE); far offsets = phrase repetition.")
     print("  the spread tells you the window size a successor's offset coder must reach.")
+
+    print("\n" + "=" * 78)
+    print("7. PER-SECTION LZ COVERAGE  - bank-capped column-major coverage")
+    print("=" * 78)
+    print("  Hard-partition each column into sections of N frames (no cross-section")
+    print("  matches), unbounded LZ within each section. Models per-section P4 where")
+    print("  each ~bank-sized chunk is decompressed independently. Compare vs the")
+    print("  unbounded column-major coverage (the headline 99.4%) to see how much")
+    print("  ratio capping the window to one decompressed bank costs.")
+    col_m_tot = sum(r["col_matched"] for r in results)
+    col_n_tot = sum(r["col_total"] for r in results)
+    print("  %-18s %9s   %s" % ("section (frames)", "~KB/bank", "coverage"))
+    for sf in SECTION_FRAMES:
+        sm = sum(r["sec_cov"][sf][0] for r in results)
+        sn = sum(r["sec_cov"][sf][1] for r in results)
+        print("  %-18d %8.1f    %5.1f%%" %
+              (sf, sf * 9 / 1024.0, 100 * sm / max(1, sn)))
+    print("  %-18s %8s    %5.1f%%" %
+          ("unbounded", "full", 100 * col_m_tot / max(1, col_n_tot)))
+    print("  a small drop => per-section decompression is cheap; a large drop =>")
+    print("  the redundancy is long-range and a bank-capped window forfeits it.")
+
+    print("\n" + "=" * 78)
+    print("8. COLUMN-MAJOR MATCH OFFSET DISTRIBUTION  - offsets in each stream's bytes")
+    print("=" * 78)
+    print("  Where the column-major (VGC-axis) matches come from, in each stream's own")
+    print("  byte units (tone streams are 2 B/frame, noise+volumes 1 B/frame). Sizes")
+    print("  the offset-field width a streamed per-column successor coder must encode.")
+    cagg = {b: 0 for b in OFFSET_BUCKETS}
+    ctm = 0
+    for r in results:
+        for b in OFFSET_BUCKETS:
+            cagg[b] += r["col_hist"][b]
+        ctm += r["col_matched"]
+    print("    " + "  ".join("%7s" % l for l in BUCKET_LABELS))
+    print("    " + "  ".join("%6.1f%%" % (100 * cagg[b] / max(1, ctm)) for b in OFFSET_BUCKETS))
+    print("  contrast with the frame-major spread (sec 6): per-column matches sit")
+    print("  closer, since each stream is denser in its own redundancy.")
 
 
 if __name__ == "__main__":
