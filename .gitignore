@@ -20,6 +20,10 @@ testvgm/
 *.pyc
 lemmings/
 
+# measurement harness intermediates (regenerated from vgm/*.vgm).
+# corpus tunes don't start with '_'; scratch/cache files do.
+vgm/_*
+
 
 
 
