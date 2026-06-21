@@ -27,7 +27,7 @@ def build_and_measure(vgm, vgi2):
     else:
         import io, contextlib
         with contextlib.redirect_stdout(io.StringIO()):
-            v1.pack(vgm, os.path.join(HERE, "music.vgi"))
+            v1.pack(vgm, os.path.join(HERE, "music.vgi"), version=1)
     B.sh([BEEBASM, "-i", "player.asm", "-D", "TEST=0", "-D", "RING_PAGE=&C0",
           "-D", "VGI2=%d" % (1 if vgi2 else 0), "-d", "-labels", "labels_full.txt"], cwd=HERE)
     lab = B.labels(os.path.join(HERE, "labels_full.txt"))

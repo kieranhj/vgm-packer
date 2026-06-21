@@ -8,18 +8,26 @@ It validates the core claim — that a byte-aligned per-column LZSS can be
 **decoded one value per stream per frame**, so a long match never lands in a
 single frame and the per-frame cost is bounded *independently of match length*.
 
-## Result (measured in simulation)
+> **The packer and player now default to the "v2" format** (offset-1 RUN token +
+> extended length + optimal parse): ~8.3% smaller than the original v1 with the
+> per-frame decode distribution unchanged. `pack_vgi.py` emits v2 (use `--v1` for
+> the original); the player is built with `-D VGI2=1`. Full study in
+> `COMPRESSION_REPORT.md`. The tables below labelled "incremental"/"v1" are the
+> original baseline; v2 is 8.3% smaller for the same runtime profile.
+
+## Result (measured in simulation, default v2 build)
 
 | check | result |
 |---|---|
 | decoder vs source (`sim_test.py`, 512 frames × 11 streams) | **PASS** — byte-exact |
 | full player SN76489 output (`sim_test_player.py`, 200 frames) | **PASS** — byte-exact |
-| per-frame cost (`measure_cycles.py`) | **min 2886 / mean 2924 / max 3927 cycles** |
-| worst frame vs 50 Hz budget (40000 cyc @ 2 MHz) | **9.8%** |
+| per-frame cost incl. sound (`measure_cycles.py`) | **min 2886 / mean 2922 / max 4294 cycles** |
+| worst frame vs 50 Hz budget (40000 cyc @ 2 MHz) | **10.7%** |
 
-The 1041-cycle spread (and ~10% budget use) is the §12.4 thesis made concrete:
-bounded, decode-once-per-frame, no decompression hitch. The worst frame is when
-many streams start a new command at once; it is still tiny.
+The worst frame is when many streams start a new token at once (and one reads an
+extended-length byte); it is still a small, bounded fraction of the frame. The
+decode-only figure (sound stubbed) is min 1466 / max 3064 — see
+`COMPRESSION_REPORT.md`.
 
 ### vs the existing VGC player (full corpus, `bench_all.py`)
 
@@ -134,11 +142,11 @@ touch larger than VGC's RLE+LZ4 but trivially bounded to decode (see §8.9/P4f).
 
 ## Files
 
-- `pack_vgi.py` — VGM → `.vgi`, with a self-verifying round-trip (both a plain
-  decoder and a faithful ring-decoder model).
+- `pack_vgi.py` — VGM → `.vgi` (v2 format by default; `--v1` for the original),
+  with self-verifying round-trips (a plain decoder and a faithful ring model).
 - `player.asm` — the 6502 player (BeebAsm). `-D TEST=1` builds a harness that
-  decodes into a buffer for the simulator; `-D TEST=0` builds the real,
-  bootable player.
+  decodes into a buffer for the simulator; `-D TEST=0` builds the real, bootable
+  player. `-D VGI2=1` (the default build) decodes v2; `-D VGI2=0` decodes v1.
 - `sim_test.py` / `sim_test_player.py` / `measure_cycles.py` — py65 checks.
 - `sim_compare.py` / `sim_vgc.asm` — per-frame cycle comparison vs the existing
   VGC player (needs a `vgm-player-bbc` checkout; see below).
@@ -148,7 +156,7 @@ touch larger than VGC's RLE+LZ4 but trivially bounded to decode (see §8.9/P4f).
   format study (build with `-D VGI2=1`): 8.3% smaller for an unchanged decode
   profile. See `COMPRESSION_REPORT.md`.
 - `build.sh` — pack, run all checks, build the disc.
-- `music.ssd` — bootable 200 KB disc image (Ghost House, ~51 s).
+- `music.ssd` — bootable 200 KB disc image (Ghost House, ~51 s, v2 format).
 
 ## Build / test
 

@@ -175,39 +175,222 @@ def build_columns(vgm_path):
     return cols, nf, rate
 
 
-def pack(vgm_path, out_path):
+# ===========================================================================
+# v2 format (default): offset-1 RUN token + single-byte extended length, with an
+# optimal (DP) parse. ~8% smaller than v1 for an unchanged bounded decode.
+#   0LLLLLLL          literal run, L+1 bytes follow                  (1..128)
+#   10LLLLLL [E]      RUN (offset 1): LLLLLL<63 -> len LLLLLL+2 (2..64),
+#                     ==63 -> len = E (65..255); no offset byte
+#   11LLLLLL [E] off  MATCH: length as above, then one offset byte (1..255)
+# Length capped at 255 (8-bit run counter); a token start reads <=3 bytes.
+# ===========================================================================
+V2_MAXLEN = 255
+V2_MINOFF = 2          # offset 1 is handled by the RUN token
+
+
+def _longest_matches(data, max_off, min_off, cap=V2_MAXLEN, chain=512):
+    n = len(data)
+    table = defaultdict(list)
+    mlen = [0] * n
+    moff = [0] * n
+    for i in range(n):
+        if i + 2 <= n:
+            key = data[i:i + 2]
+            cand = table[key]
+            best_l = 0; best_o = 0; seen = 0
+            maxl = min(cap, n - i)
+            for p in reversed(cand):
+                off = i - p
+                if off > max_off:
+                    break
+                seen += 1
+                if seen > chain:
+                    break
+                if off < min_off:
+                    continue
+                l = 0
+                while l < maxl and data[p + l] == data[i + l]:
+                    l += 1
+                if l > best_l:
+                    best_l = l; best_o = off
+                    if l >= maxl:
+                        break
+            mlen[i] = best_l; moff[i] = best_o
+            cand.append(i)
+    return mlen, moff
+
+
+def _longest_runs(data):
+    n = len(data)
+    rlen = [0] * n
+    i = 0
+    while i < n:
+        if i >= 1 and data[i] == data[i - 1]:
+            j = i
+            base = data[i - 1]
+            while j < n and data[j] == base:
+                j += 1
+            for k in range(i, j):
+                rlen[k] = (j - i) - (k - i)
+            i = j
+        else:
+            i += 1
+    return rlen
+
+
+def _v2_optimal(data):
+    n = len(data)
+    if n == 0:
+        return []
+    mlen, moff = _longest_matches(data, 255, V2_MINOFF)
+    rlen = _longest_runs(data)
+    rcost = lambda L: 1 + (1 if L > 64 else 0)
+    mcost = lambda L: 2 + (1 if L > 64 else 0)
+    INF = float("inf")
+    dp = [INF] * (n + 1); dp[n] = 0
+    nxt = [None] * (n + 1)
+    for i in range(n - 1, -1, -1):
+        best = INF; choice = None
+        for k in range(1, min(128, n - i) + 1):
+            c = 1 + k + dp[i + k]
+            if c < best:
+                best = c; choice = ("L", i, k)
+        R = min(rlen[i], V2_MAXLEN)
+        if R >= 2:
+            c = rcost(R) + dp[i + R]
+            if c < best:
+                best = c; choice = ("R", R)
+        M = min(mlen[i], V2_MAXLEN)
+        if M >= 2:
+            c = mcost(M) + dp[i + M]
+            if c < best:
+                best = c; choice = ("M", moff[i], M)
+            c2 = mcost(2) + dp[i + 2]
+            if c2 < best:
+                best = c2; choice = ("M", moff[i], 2)
+        dp[i] = best; nxt[i] = choice
+    ops = []
+    i = 0
+    while i < n:
+        op = nxt[i]
+        ops.append(op)
+        i += op[1] if op[0] == "R" else op[2]
+    return ops
+
+
+def _v2_emit_len(out, base_cmd, L):
+    if L <= 64:
+        out.append(base_cmd | (L - 2))
+    else:
+        out.append(base_cmd | 0x3f)
+        out.append(L)
+
+
+def v2_encode(data):
+    out = bytearray()
+    for op in _v2_optimal(data):
+        if op[0] == "L":
+            _, start, k = op
+            out.append(k - 1)
+            out += data[start:start + k]
+        elif op[0] == "R":
+            _v2_emit_len(out, 0x80, op[1])
+        else:
+            _, off, L = op
+            _v2_emit_len(out, 0xC0, L)
+            out.append(off)
+    return bytes(out)
+
+
+def v2_decode(blob, nout):
+    out = bytearray(); i = 0
+    while len(out) < nout:
+        cmd = blob[i]; i += 1
+        if cmd < 0x80:
+            k = cmd + 1
+            out += blob[i:i + k]; i += k
+        else:
+            field = cmd & 0x3f
+            L = field + 2 if field < 0x3f else blob[i]
+            if field == 0x3f:
+                i += 1
+            off = 1 if cmd < 0xC0 else blob[i]
+            if cmd >= 0xC0:
+                i += 1
+            src = len(out) - off
+            for _ in range(L):
+                out.append(out[src]); src += 1
+    return bytes(out[:nout])
+
+
+def v2_decode_ring(blob, nout):
+    ring = bytearray(256); head = 0; rem = 0; copy = 0; ismatch = False
+    out = bytearray(); i = 0
+    while len(out) < nout:
+        if rem == 0:
+            cmd = blob[i]; i += 1
+            if cmd < 0x80:
+                rem = cmd + 1; ismatch = False
+            else:
+                field = cmd & 0x3f
+                if field < 0x3f:
+                    rem = field + 2
+                else:
+                    rem = blob[i]; i += 1
+                if cmd < 0xC0:
+                    copy = (head - 1) & 0xff
+                else:
+                    copy = (head - blob[i]) & 0xff; i += 1
+                ismatch = True
+        if ismatch:
+            b = ring[copy]; copy = (copy + 1) & 0xff
+        else:
+            b = blob[i]; i += 1
+        ring[head] = b; head = (head + 1) & 0xff
+        rem -= 1
+        out.append(b)
+    return bytes(out[:nout])
+
+
+def pack(vgm_path, out_path, version=2):
+    """Pack a VGM to .vgi. version=2 (default) = optimal RUN+extlen format;
+    version=1 = the original greedy LZSS (kept for reference/comparison)."""
     cols, nf, rate = build_columns(vgm_path)
     blobs = []
     for c in range(11):
-        blob = lzss_encode(cols[c])
-        assert lzss_decode(blob, nf) == bytes(cols[c]), "lzss round-trip failed col %d" % c
-        assert lzss_decode_ring(blob, nf) == bytes(cols[c]), "ring round-trip failed col %d" % c
+        data = bytes(cols[c])
+        if version == 2:
+            blob = v2_encode(data)
+            assert v2_decode(blob, nf) == data, "v2 round-trip failed col %d" % c
+            assert v2_decode_ring(blob, nf) == data, "v2 ring round-trip failed col %d" % c
+        else:
+            blob = lzss_encode(data)
+            assert lzss_decode(blob, nf) == data, "v1 round-trip failed col %d" % c
+            assert lzss_decode_ring(blob, nf) == data, "v1 ring round-trip failed col %d" % c
         blobs.append(blob)
 
     header = bytearray()
-    header += b"VGI\x01"
+    header += b"VGI\x02" if version == 2 else b"VGI\x01"
     header += bytes((nf & 0xff, (nf >> 8) & 0xff))
     base = 4 + 2 + 11 * 2
     off = base
-    offsets = []
     for b in blobs:
-        offsets.append(off)
+        header += bytes((off & 0xff, (off >> 8) & 0xff))
         off += len(b)
-    for o in offsets:
-        header += bytes((o & 0xff, (o >> 8) & 0xff))
     assert len(header) == base
 
     data = bytes(header) + b"".join(blobs)
-    with open(out_path, "wb") as fh:
-        fh.write(data)
+    if out_path:
+        with open(out_path, "wb") as fh:
+            fh.write(data)
 
     total = len(data)
-    print("packed %s" % os.path.basename(vgm_path))
+    print("packed %s  (v%d)" % (os.path.basename(vgm_path), version))
     print("  frames   : %d  (%d Hz, ~%.1f s)" % (nf, rate, nf / float(rate or 50)))
-    print("  per-stream LZSS bytes: %s" % " ".join(str(len(b)) for b in blobs))
-    print("  total .vgi: %d bytes (header %d + streams %d)" %
-          (total, base, total - base))
-    print("  -> %s" % out_path)
+    print("  per-stream bytes: %s" % " ".join(str(len(b)) for b in blobs))
+    print("  total .vgi: %d bytes (header %d + streams %d)" % (total, base, total - base))
+    if out_path:
+        print("  -> %s" % out_path)
     return data, nf
 
 
@@ -215,9 +398,11 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("input")
     ap.add_argument("-o", "--output")
+    ap.add_argument("-1", "--v1", action="store_true",
+                    help="emit the original greedy v1 format instead of v2")
     args = ap.parse_args()
     out = args.output or (os.path.splitext(args.input)[0] + ".vgi")
-    pack(args.input, out)
+    pack(args.input, out, version=1 if args.v1 else 2)
 
 
 if __name__ == "__main__":

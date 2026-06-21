@@ -42,7 +42,7 @@ def main():
         name = os.path.basename(f)
         with contextlib.redirect_stdout(io.StringIO()):
             cols, nf, rate = v1.build_columns(f)
-            d1, _ = v1.pack(f, "/tmp/_m.vgi")
+            d1, _ = v1.pack(f, "/tmp/_m.vgi", version=1)
             d2, _ = v2.pack(f, None)
         opt = opt_only_size([bytes(c) for c in cols], nf)
         vgcp = os.path.join(CACHE, name.replace(" ", "_") + ".vgc")

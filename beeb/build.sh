@@ -10,17 +10,17 @@ echo "== pack =="
 python pack_vgi.py "$VGM" -o music.vgi
 
 echo "== sim: decoder =="
-"$BEEBASM" -i player.asm -D TEST=1 -D RING_PAGE=&60 -D VGI2=0 -d -labels labels.txt
+"$BEEBASM" -i player.asm -D TEST=1 -D RING_PAGE=96 -D VGI2=1 -d -labels labels.txt
 python sim_test.py
 
 echo "== sim: full player path =="
-"$BEEBASM" -i player.asm -D TEST=0 -D RING_PAGE=&60 -D VGI2=0 -d -labels labels_full.txt
+"$BEEBASM" -i player.asm -D TEST=0 -D RING_PAGE=96 -D VGI2=1 -d -labels labels_full.txt
 python sim_test_player.py
 python measure_cycles.py
 
 echo "== build bootable disc =="
 rm -f music.ssd
-"$BEEBASM" -i player.asm -D TEST=0 -D RING_PAGE=&60 -D VGI2=0 -do music.ssd -boot Player -title GHOST -opt 3
+"$BEEBASM" -i player.asm -D TEST=0 -D RING_PAGE=96 -D VGI2=1 -do music.ssd -boot Player -title GHOSTV2 -opt 3
 # pad to a standard 200 KB (80-track SS) image
 python - <<'PY'
 import os
