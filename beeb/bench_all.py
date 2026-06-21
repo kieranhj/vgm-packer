@@ -13,6 +13,9 @@ import os
 import re
 import sys
 import glob
+import shutil
+import pickle
+import statistics
 import subprocess
 
 from py65.devices.mpu6502 import MPU
@@ -22,6 +25,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 VGCDIR = os.environ.get("VGM_PLAYER_BBC", os.path.join(HERE, "..", "..", "vgm-player-bbc"))
 BEEBASM = os.environ.get("BEEBASM", "beebasm")
+CACHE = os.path.join(HERE, "_cache")
 RTS = 0x60
 RETSENT = 0x9000
 BUDGET = 2_000_000 // 50
@@ -63,11 +67,23 @@ def make_mpu(image, load, stub_addr):
 
 
 def measure(image, load, stub, init, frames):
-    """init = (addr, a, x, y, carry); returns (min, mean, max)."""
+    """init = (init_addr, a, x, y, carry, frame_addr); returns the per-frame
+    cycle cost list."""
     mpu = make_mpu(image, load, stub)
     call(mpu, init[0], init[1], init[2], init[3], init[4])
-    costs = [call(mpu, init[5]) for _ in range(frames)]   # init[5] = per-frame addr
-    return min(costs), sum(costs) / len(costs), max(costs)
+    return [call(mpu, init[5]) for _ in range(frames)]
+
+
+def cached_vgc(vgm):
+    """Pack vgm -> .vgc, caching by source mtime, and copy to ghost.vgc."""
+    if not os.path.isdir(CACHE):
+        os.makedirs(CACHE)
+    safe = re.sub(r'[^A-Za-z0-9._-]', '_', os.path.basename(vgm)) + ".vgc"
+    cpath = os.path.join(CACHE, safe)
+    if not (os.path.exists(cpath) and os.path.getmtime(cpath) >= os.path.getmtime(vgm)):
+        sh([sys.executable, os.path.join(ROOT, "vgmpacker.py"), vgm, "-o", cpath], cwd=ROOT)
+    shutil.copyfile(cpath, os.path.join(VGCDIR, "ghost.vgc"))
+    return os.path.getsize(cpath)
 
 
 def bench_one(vgm):
@@ -75,9 +91,7 @@ def bench_one(vgm):
     # --- pack both formats ---
     data, nf = pack_vgi(vgm, os.path.join(HERE, "music.vgi"))
     vgi_size = len(data)
-    vgc_path = os.path.join(VGCDIR, "ghost.vgc")
-    sh([sys.executable, os.path.join(ROOT, "vgmpacker.py"), vgm, "-o", vgc_path], cwd=ROOT)
-    vgc_size = os.path.getsize(vgc_path)
+    vgc_size = cached_vgc(vgm)
 
     # --- assemble both players ---
     # rings up at &C000 so even the largest .vgi fits below them in the 64K sim
@@ -99,10 +113,16 @@ def bench_one(vgm):
                      (vl["vgm_init"], bhi, d & 0xff, (d >> 8) & 0xff, True, vl["vgm_update"]), nf)
 
     return dict(name=name, nf=nf, vgi=vgi_size, vgc=vgc_size,
-                n=nstats, v=vstats, nl=nl, vl=vl)
+                incr=nstats, vcost=vstats, nl=nl, vl=vl)
+
+
+def smm(costs):
+    return (min(costs), int(statistics.median(costs)),
+            int(round(statistics.fmean(costs))), max(costs))
 
 
 def main():
+    import numpy as np
     files = sorted(glob.glob(os.path.join(ROOT, "vgm", "*.vgm")))
     rows = []
     for i, f in enumerate(files, 1):
@@ -120,9 +140,20 @@ def main():
     # fixed footprints (tune-independent), taken from the last build's labels
     nl, vl = rows[-1]["nl"], rows[-1]["vl"]
     n_prog = nl["music_data"] - 0x1900           # code + state tables
-    n_buf = 11 * 256                              # 11 stream ring buffers
+    n_buf = 11 * 256                             # 11 stream ring buffers
     v_prog = vl["vgm_stream_buffers"] - 0x1100   # code + state tables
     v_buf = vl["vgm_data"] - vl["vgm_stream_buffers"]
+
+    # persist raw per-frame arrays + metadata for plotting
+    if not os.path.isdir(CACHE):
+        os.makedirs(CACHE)
+    blob = {"budget": BUDGET,
+            "footprint": {"incr": (n_prog, n_buf, 7), "vgc": (v_prog, v_buf, 8)},
+            "tunes": [{"name": r["name"], "nf": r["nf"], "vgi": r["vgi"],
+                       "vgc": r["vgc"], "incr": r["incr"], "vgc_cost": r["vcost"]}
+                      for r in rows]}
+    with open(os.path.join(CACHE, "bench_costs.pkl"), "wb") as fh:
+        pickle.dump(blob, fh)
 
     print("\n=== FOOTPRINT (fixed, tune-independent) ===")
     print("  %-22s %6s %9s %6s %8s" % ("player", "code", "buffers", "zp", "total"))
@@ -130,28 +161,41 @@ def main():
           ("incremental (.vgi)", n_prog, n_buf, 7, n_prog + n_buf + 7))
     print("  %-22s %6d %9d %6d %8d" %
           ("existing VGC (8xLZ4)", v_prog, v_buf, 8, v_prog + v_buf + 8))
-    print("  (incremental: 11 x 256B rings; VGC: 8 x 256B buffers. zp approx.)")
 
-    print("\n=== COMPRESSED SIZE & PER-FRAME COST (decode+reconstruct, SN write stubbed) ===")
+    print("\n=== SIZE & PER-FRAME COST (cycles; decode+reconstruct, SN write stubbed) ===")
     print("  budget = %d cycles/frame (50 Hz @ 2 MHz)\n" % BUDGET)
-    h = "  %-32s %6s %7s %7s | %16s | %16s"
-    print(h % ("tune", "frames", ".vgi", ".vgc", "incr  mean/max", "VGC   mean/max"))
-    print("  " + "-" * 96)
+    print("  %-30s %6s %6s %6s | %-23s | %-23s" %
+          ("tune", "frames", ".vgi", ".vgc",
+           "incremental min/med/mn/mx", "VGC      min/med/mn/mx"))
+    print("  " + "-" * 104)
     tot = dict(nf=0, vgi=0, vgc=0)
-    nmax = vmax = 0
+    alln, allv = [], []
     for r in rows:
-        print("  %-32s %6d %7d %7d | %7.0f /%6d | %7.0f /%6d" %
-              (r["name"][:32], r["nf"], r["vgi"], r["vgc"],
-               r["n"][1], r["n"][2], r["v"][1], r["v"][2]))
+        nmin, nmed, nmn, nmx = smm(r["incr"])
+        vmin, vmed, vmn, vmx = smm(r["vcost"])
+        print("  %-30s %6d %6d %6d | %5d %5d %5d %5d | %5d %5d %5d %5d" %
+              (r["name"][:30], r["nf"], r["vgi"], r["vgc"],
+               nmin, nmed, nmn, nmx, vmin, vmed, vmn, vmx))
         tot["nf"] += r["nf"]; tot["vgi"] += r["vgi"]; tot["vgc"] += r["vgc"]
-        nmax = max(nmax, r["n"][2]); vmax = max(vmax, r["v"][2])
-    print("  " + "-" * 96)
-    print("  %-32s %6d %7d %7d |  corpus-wide worst-case frame:    | " %
-          ("TOTAL", tot["nf"], tot["vgi"], tot["vgc"]))
-    print("  %-32s %6s %7s %7s | incr max %d (%.1f%%)  VGC max %d (%.1f%%)" %
-          ("", "", "", "", nmax, 100.0 * nmax / BUDGET, vmax, 100.0 * vmax / BUDGET))
+        alln += r["incr"]; allv += r["vcost"]
+    print("  " + "-" * 104)
+    print("  %-30s %6d %6d %6d |" % ("TOTAL", tot["nf"], tot["vgi"], tot["vgc"]))
     print("\n  .vgi total %d vs .vgc total %d  (%.2fx)" %
           (tot["vgi"], tot["vgc"], float(tot["vgi"]) / tot["vgc"]))
+
+    an, av = np.array(alln), np.array(allv)
+    print("\n=== CORPUS-WIDE PER-FRAME DISTRIBUTION (%d frames) ===" % len(an))
+    pct = [50, 90, 99, 99.9, 100]
+    print("  %-22s %7s %7s %7s %8s %7s" % ("percentile", "p50", "p90", "p99", "p99.9", "max"))
+    print("  %-22s %7d %7d %7d %8d %7d" %
+          ("incremental", *[int(np.percentile(an, p)) for p in pct]))
+    print("  %-22s %7d %7d %7d %8d %7d" %
+          ("existing VGC", *[int(np.percentile(av, p)) for p in pct]))
+    print("\n=== SPIKE FREQUENCY (how often per-frame cost exceeds a threshold) ===")
+    for thr in (2787, 3500, 4000, 4500):
+        print("  > %d cyc :  incremental %6.2f%%   VGC %6.2f%%" %
+              (thr, 100.0 * (an > thr).mean(), 100.0 * (av > thr).mean()))
+    print("  (2787 = the incremental decoder's corpus worst case)")
     return 0
 
 

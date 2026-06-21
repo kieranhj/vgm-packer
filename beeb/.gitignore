@@ -1,6 +1,8 @@
 # build intermediates
+*.bin
 Player
+__pycache__/
+_cache/
 labels.txt
 labels_full.txt
-*.bin
-__pycache__/
+music.vgi
