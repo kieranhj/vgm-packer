@@ -744,38 +744,30 @@ matches. **Measured per-frame cost: min 2886 / mean 2924 / max 3927 cycles** —
 is bounded and ~independent of match length. A bootable disc (`beeb/music.ssd`, Ghost House,
 ~51 s) is included; only the sound-chip /WE strobe timing remains to be confirmed on hardware.
 
-**Head-to-head vs the existing VGC player, full corpus** (`beeb/bench_all.py`: both players
-through the same py65 cycle measurement on all 11 tunes, SN write stubbed in both so only
-decode + register reconstruction is timed). Fixed footprint: incremental = 536 B code + 2816 B
-buffers (11×256) + 7 zp = **3359 B**; VGC = 768 B code + 2048 B buffers (8×256) + 8 zp =
-**2824 B**. Per-frame cost (cycles, 50 Hz budget = 40000) and compressed size:
+**Head-to-head, all players, full corpus** (`beeb/bench_players.py`: the same py65 measurement
+over the 11 tunes / 74052 frames, SN write stubbed in *every* player — now apples-to-apples
+since they all share the same no-delay `sn`). Per-frame decode-cost percentiles (cycles; 50 Hz
+budget = 40000):
 
-| | `.vgi` total | `.vgc` total | incr worst frame | VGC worst frame | incr mean range | VGC mean range |
-|---|--:|--:|--:|--:|--:|--:|
-| corpus (74052 frames) | 122,101 | 80,108 | **2787 (7.0%)** | **5396 (13.5%)** | 1508–1600 | 996–2557 |
-
-Three clear results: (1) **size** — `.vgi` is **1.52× larger** than `.vgc` (flat per-column LZSS
-vs RLE+LZ4 is the price of the simpler decoder); (2) **worst-case decode** — the incremental
-player is **bounded and flat at ≤2787 cycles (≤7.0%) on every tune**, consistently **~half** the
-VGC player's 4814–5396 (≤13.5%) spikes (which occur when several streams refill their LZ4 at
-once — the §3 variable cost, now measured); (3) **mean decode** — the incremental mean is
-rock-steady (~1550) while VGC's is data-dependent (cheap on repetitive tunes via RLE-run skips,
-dearer on busy ones).
-
-The per-frame **distribution** (`beeb/plot_dist.py`, fig. `beeb/frame_cost_distribution.png`)
-shows VGC's spikes are *frequent, not one-off*. Corpus percentiles (cycles):
-
-| | p50 | p90 | p99 | p99.9 | max |
+| player | p50 | p90 | p99 | p99.9 | max |
 |---|--:|--:|--:|--:|--:|
-| incremental | 1466 | 1752 | 2167 | 2428 | **2787** |
-| existing VGC | 1557 | 2995 | 3872 | 4307 | **5396** |
+| **VGI unrolled** (`-D UNROLL=1`) | **673** | 996 | 1458 | 1801 | **2404** |
+| VGI looped (default) | 1158 | 1451 | 1876 | 2196 | 2770 |
+| VGC-opt (resident context) | 1143 | 2168 | 2855 | 3345 | 4624 |
+| VGC original | 1557 | 2995 | 3872 | 4307 | 5396 |
 
-VGC exceeds the incremental decoder's *entire* worst case (2787) on **13.4% of frames**, and
-3500 cycles on 3.6%; the >4500 spikes are rare (0.04%) but set the ceiling you must budget for.
-The incremental decoder never crosses 2787 (its p99.9 is 2428). So the incremental scheme trades
-~1.5× storage (and ~0.5 KB RAM) for a bounded, predictable worst case — exactly what a
-timing-critical, single-bank player budgets against. Full per-tune table (with min/median) in
-`beeb/README.md`.
+The story (figs `beeb/players_distribution.png`, `beeb/players_timeseries.png`): the VGI players
+are **flat and bounded** (unrolled never exceeds 2404; looped 2770), while both VGC players are
+**spiky** — cheap on RLE-run frames, expensive when several streams refill an LZ token at once.
+Optimising VGC — eliminating its per-decoded-byte zero-page context swap, see
+`beeb/VGC_OPTIMISATION_PLAN.md` — cut the original's median 1557→1143 and max 5396→4624 (and its
+code) for byte-identical output, but the spikes remain. **VGI-unrolled is fastest and most
+predictable on every metric;** VGC-opt's median actually undercuts VGI-looped (RLE lets it skip
+most decodes) but its worst case is still ~1.7–1.9× VGI's. Footprints: VGI looped 580 B /
+unrolled 1252 B code + 2816 B rings; VGC ~830–950 B code + 2048 B buffers. On **size** the trade
+is reversed — `.vgi` is ~1.4× `.vgc` (RLE+LZ4 packs tighter). VGI buys a bounded, predictable
+per-frame cost; VGC buys smaller files. (Decode-only; real totals add each player's sound writes —
+VGI writes all 11 registers/frame, VGC only the changed ones via RLE.)
 
 **Improving the ratio without losing the bound (`beeb/COMPRESSION_REPORT.md`).** A revised token
 format ("v2": offset-1 RUN token + single-byte extended length + optimal parse, `-D VGI2=1`)
