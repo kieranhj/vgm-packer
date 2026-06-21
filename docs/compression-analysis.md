@@ -744,6 +744,21 @@ matches. **Measured per-frame cost: min 2886 / mean 2924 / max 3927 cycles** —
 is bounded and ~independent of match length. A bootable disc (`beeb/music.ssd`, Ghost House,
 ~51 s) is included; only the sound-chip /WE strobe timing remains to be confirmed on hardware.
 
+**Head-to-head vs the existing VGC player** (`beeb/sim_compare.py`, same tune, same simulator,
+SN write stubbed in both so only decode + register reconstruction is timed):
+
+| per-frame decode (2559 frames) | min | mean | max | spread |
+|---|--:|--:|--:|--:|
+| incremental (`.vgi`) | 1466 | 1548 | **2503** | **1037** |
+| existing VGC (8× LZ4 + RLE) | 294 | 1521 | **4814** | **4520** |
+
+The means are within 2%, but the incremental decoder's **worst frame is ~half VGC's** (2503 vs
+4814 cycles) with **~4.4× tighter spread**. VGC is near-free when its streams sit in an RLE run
+(min 294) but spikes when several streams refill their LZ4 at once — the variable per-frame cost
+of §3, now measured. So the incremental scheme buys a *bounded* ceiling (the thing a
+timing-critical demo budgets against) at no mean-cost penalty — exactly what §12.4 set out to
+show.
+
 ---
 
 ## 13. Sources

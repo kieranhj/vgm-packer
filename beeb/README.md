@@ -21,6 +21,30 @@ The 1041-cycle spread (and ~10% budget use) is the §12.4 thesis made concrete:
 bounded, decode-once-per-frame, no decompression hitch. The worst frame is when
 many streams start a new command at once; it is still tiny.
 
+### vs the existing VGC player (`sim_compare.py`)
+
+Same tune, same simulator, **SN76489 write stubbed to RTS in both** so we compare
+decode + register reconstruction only (the players' real `sn_write` routines
+differ — VGC's has no strobe delay, mine has a conservative tunable one):
+
+| per-frame decode (2559 frames) | min | mean | max | spread | worst vs 50 Hz |
+|---|--:|--:|--:|--:|--:|
+| incremental (`.vgi`) | 1466 | 1548 | **2503** | **1037** | 6.3% |
+| existing VGC (8× LZ4 + RLE) | 294 | 1521 | **4814** | **4520** | 12.0% |
+
+**Same mean (~1.02×), but the incremental player's worst frame is ~half VGC's
+(2503 vs 4814) with ~4.4× tighter spread.** VGC is cheap when streams sit in an
+RLE run (min 294) but spikes when several streams refill their LZ4 at once — the
+variable per-frame cost §3 warns about, now quantified. The incremental decoder
+trades a higher floor for a much lower, tighter ceiling: exactly the bounded
+worst-case §12.4 wants. (Real per-frame totals add the sound writes on top of
+both; that's a tunable constant, not a decode difference.)
+
+Reproduce: clone `github.com/kieranhj/vgm-player-bbc` next to `vgm-packer`, copy
+`sim_vgc.asm` into it, pack the same tune (`python ../vgmpacker.py "<vgm>" -o
+ghost.vgc`), assemble `beebasm -i sim_vgc.asm -d -labels vgc_labels.txt`, then
+run `python sim_compare.py` from `beeb/`.
+
 ## The `.vgi` format
 
 11 register columns (one per SN76489 register), each compressed independently
@@ -57,6 +81,8 @@ touch larger than VGC's RLE+LZ4 but trivially bounded to decode (see §8.9/P4f).
   decodes into a buffer for the simulator; `-D TEST=0` builds the real,
   bootable player.
 - `sim_test.py` / `sim_test_player.py` / `measure_cycles.py` — py65 checks.
+- `sim_compare.py` / `sim_vgc.asm` — per-frame cycle comparison vs the existing
+  VGC player (needs a `vgm-player-bbc` checkout; see below).
 - `build.sh` — pack, run all checks, build the disc.
 - `music.ssd` — bootable 200 KB disc image (Ghost House, ~51 s).
 
