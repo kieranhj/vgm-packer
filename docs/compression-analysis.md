@@ -777,6 +777,14 @@ The incremental decoder never crosses 2787 (its p99.9 is 2428). So the increment
 timing-critical, single-bank player budgets against. Full per-tune table (with min/median) in
 `beeb/README.md`.
 
+**Improving the ratio without losing the bound (`beeb/COMPRESSION_REPORT.md`).** A revised token
+format ("v2": offset-1 RUN token + single-byte extended length + optimal parse, `-D VGI2=1`)
+cuts the corpus `.vgi` **8.3%** (1.52× → **1.40×** `.vgc`) with the per-frame distribution
+unchanged (p50/p90/p99 identical; worst frame 2787 → 3064 = 7.7% of a frame, still < ⅔ of VGC's
+spike), +58 B code, no extra RAM. The optimal parse alone is a free 1.9% (decoder identical).
+Combining tone columns (8 streams) was measured *worse* on ratio; 16-bit offsets reach ~0.78× but
+trade the bounded-RAM property. See the report for the full study.
+
 ---
 
 ## 13. Sources

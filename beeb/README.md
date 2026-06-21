@@ -144,6 +144,9 @@ touch larger than VGC's RLE+LZ4 but trivially bounded to decode (see §8.9/P4f).
   VGC player (needs a `vgm-player-bbc` checkout; see below).
 - `bench_all.py` / `plot_dist.py` — full-corpus size/footprint/cost table and the
   cost-distribution figure.
+- `pack_vgi2.py` / `explore_vgi.py` / `measure_v2*.py` / `plot_v2.py` — the "v2"
+  format study (build with `-D VGI2=1`): 8.3% smaller for an unchanged decode
+  profile. See `COMPRESSION_REPORT.md`.
 - `build.sh` — pack, run all checks, build the disc.
 - `music.ssd` — bootable 200 KB disc image (Ghost House, ~51 s).
 
