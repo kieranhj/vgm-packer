@@ -760,9 +760,22 @@ player is **bounded and flat at ≤2787 cycles (≤7.0%) on every tune**, consis
 VGC player's 4814–5396 (≤13.5%) spikes (which occur when several streams refill their LZ4 at
 once — the §3 variable cost, now measured); (3) **mean decode** — the incremental mean is
 rock-steady (~1550) while VGC's is data-dependent (cheap on repetitive tunes via RLE-run skips,
-dearer on busy ones). So the incremental scheme trades ~1.5× storage (and ~0.5 KB RAM) for a
-bounded, predictable worst case — exactly what a timing-critical, single-bank player budgets
-against. Full per-tune table in `beeb/README.md`.
+dearer on busy ones).
+
+The per-frame **distribution** (`beeb/plot_dist.py`, fig. `beeb/frame_cost_distribution.png`)
+shows VGC's spikes are *frequent, not one-off*. Corpus percentiles (cycles):
+
+| | p50 | p90 | p99 | p99.9 | max |
+|---|--:|--:|--:|--:|--:|
+| incremental | 1466 | 1752 | 2167 | 2428 | **2787** |
+| existing VGC | 1557 | 2995 | 3872 | 4307 | **5396** |
+
+VGC exceeds the incremental decoder's *entire* worst case (2787) on **13.4% of frames**, and
+3500 cycles on 3.6%; the >4500 spikes are rare (0.04%) but set the ceiling you must budget for.
+The incremental decoder never crosses 2787 (its p99.9 is 2428). So the incremental scheme trades
+~1.5× storage (and ~0.5 KB RAM) for a bounded, predictable worst case — exactly what a
+timing-critical, single-bank player budgets against. Full per-tune table (with min/median) in
+`beeb/README.md`.
 
 ---
 

@@ -35,22 +35,49 @@ has no strobe delay, mine has a conservative tunable one).
 | incremental (`.vgi`) | 536 | 2816 (11×256) | 7 | **3359** |
 | existing VGC (8× LZ4) | 768 | 2048 (8×256) | 8 | **2824** |
 
-**Compressed size & per-frame cost (cycles; 50 Hz budget = 40000 @ 2 MHz):**
+**Compressed size & per-frame cost (cycles; 50 Hz budget = 40000 @ 2 MHz).**
+Columns: incremental and VGC each as min / median / mean / max.
 
-| tune | frames | `.vgi` | `.vgc` | incr mean | incr max | VGC mean | VGC max |
-|---|--:|--:|--:|--:|--:|--:|--:|
-| evil-influences | 15210 | 31410 | 20085 | 1580 | 2612 | 1669 | 5396 |
-| BotB Slimeball | 4458 | 10029 | 5674 | 1600 | 2757 | 1655 | 5050 |
-| Collision Chaos | 5000 | 4821 | 2209 | 1521 | 2787 | 996 | 4873 |
-| Diagonals | 8069 | 16486 | 11568 | 1578 | 2612 | 1538 | 4814 |
-| Ghost House | 2559 | 3916 | 2670 | 1548 | 2503 | 1521 | 4814 |
-| U_LOADER | 1999 | 3116 | 3537 | 1556 | 2582 | 2557 | 4814 |
-| VE3 | 12547 | 25776 | 18528 | 1582 | 2706 | 2247 | 5050 |
-| intro_test | 2242 | 1686 | 771 | 1508 | 2461 | 1787 | 5116 |
-| main_test | 8846 | 9654 | 6794 | 1530 | 2615 | 1797 | 4873 |
-| ne7-magic_beans | 6976 | 10100 | 5708 | 1548 | 2721 | 1028 | 5396 |
-| outro_test | 6146 | 5107 | 2564 | 1514 | 2496 | 1499 | 5352 |
-| **total / worst** | 74052 | **122101** | **80108** | — | **2787** | — | **5396** |
+| tune | frames | `.vgi` | `.vgc` | incr min/med/mean/max | VGC min/med/mean/max |
+|---|--:|--:|--:|--:|--:|
+| evil-influences | 15210 | 31410 | 20085 | 1466 / 1481 / 1580 / 2612 | 294 / 1561 / 1669 / 5396 |
+| BotB Slimeball | 4458 | 10029 | 5674 | 1466 / 1479 / 1600 / 2757 | 294 / 1539 / 1655 / 5050 |
+| Collision Chaos | 5000 | 4821 | 2209 | 1466 / 1466 / 1521 / 2787 | 294 / 626 / 996 / 4873 |
+| Diagonals | 8069 | 16486 | 11568 | 1466 / 1466 / 1578 / 2612 | 294 / 1406 / 1538 / 4814 |
+| Ghost House | 2559 | 3916 | 2670 | 1466 / 1466 / 1548 / 2503 | 294 / 1541 / 1521 / 4814 |
+| U_LOADER | 1999 | 3116 | 3537 | 1466 / 1466 / 1556 / 2582 | 294 / 2462 / 2557 / 4814 |
+| VE3 | 12547 | 25776 | 18528 | 1466 / 1479 / 1582 / 2706 | 294 / 2160 / 2247 / 5050 |
+| intro_test | 2242 | 1686 | 771 | 1466 / 1466 / 1508 / 2461 | 294 / 1820 / 1787 / 5116 |
+| main_test | 8846 | 9654 | 6794 | 1466 / 1466 / 1530 / 2615 | 294 / 1604 / 1797 / 4873 |
+| ne7-magic_beans | 6976 | 10100 | 5708 | 1466 / 1466 / 1548 / 2721 | 294 / 897 / 1028 / 5396 |
+| outro_test | 6146 | 5107 | 2564 | 1466 / 1466 / 1514 / 2496 | 294 / 1272 / 1499 / 5352 |
+| **total / worst** | 74052 | **122101** | **80108** | max **2787** | max **5396** |
+
+### Distribution — are VGC's spikes one-off or frequent? (`plot_dist.py`)
+
+Corpus-wide per-frame cost (74052 frames), and how often each player exceeds a
+threshold:
+
+| | p50 | p90 | p99 | p99.9 | max |
+|---|--:|--:|--:|--:|--:|
+| incremental | 1466 | 1752 | 2167 | 2428 | **2787** |
+| existing VGC | 1557 | 2995 | 3872 | 4307 | **5396** |
+
+| frames over… | incremental | VGC |
+|---|--:|--:|
+| > 2787 (incr's worst) | 0.00% | **13.42%** |
+| > 3500 | 0.00% | 3.63% |
+| > 4000 | 0.00% | 0.46% |
+| > 4500 | 0.00% | 0.04% |
+
+**The spikes are frequent, not one-off:** VGC exceeds the incremental decoder's
+*entire* worst case on **>1 in 8 frames** (13.4%), and tops 3500 cycles on ~1 in
+28. The really big spikes (>4500) are rare (1 in ~2500) but you must still budget
+for the 5396 ceiling. The incremental decoder never crosses 2787 — even its
+p99.9 (2428) sits below VGC's median-ish band. See
+`frame_cost_distribution.png` (histogram + a cost-over-time trace of the spikiest
+tune, Collision Chaos, where VGC idles cheaply on RLE runs but spikes recur
+throughout).
 
 Reading it:
 
@@ -115,6 +142,8 @@ touch larger than VGC's RLE+LZ4 but trivially bounded to decode (see §8.9/P4f).
 - `sim_test.py` / `sim_test_player.py` / `measure_cycles.py` — py65 checks.
 - `sim_compare.py` / `sim_vgc.asm` — per-frame cycle comparison vs the existing
   VGC player (needs a `vgm-player-bbc` checkout; see below).
+- `bench_all.py` / `plot_dist.py` — full-corpus size/footprint/cost table and the
+  cost-distribution figure.
 - `build.sh` — pack, run all checks, build the disc.
 - `music.ssd` — bootable 200 KB disc image (Ghost House, ~51 s).
 
