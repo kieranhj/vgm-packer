@@ -71,6 +71,8 @@ ENDIF
   LDA music_data+5 : STA framehi
 .h_loop
   JSR waitvsync
+  JSR h_delay_visible              \ vsync is ~38 scanlines above the visible top:
+                                   \ wait 38*128=4864 cyc so the band is on-screen
   LDA #(RCOL EOR 7) : STA &FE21     \ band on  (logical 0 -> RCOL)
   JSR do_frame
   LDA #(0 EOR 7)    : STA &FE21     \ band off (logical 0 -> black)
@@ -80,6 +82,15 @@ ENDIF
   DEC framelo
   LDA framelo : ORA framehi : BNE h_loop
   JMP h_restart
+\ ~4864-cycle delay (38 scanlines) so the raster band lands in the visible area.
+.h_delay_visible
+  LDX #4
+.hdv_o
+  LDY #240
+.hdv_i
+  DEY : BNE hdv_i
+  DEX : BNE hdv_o
+  RTS
 .h_cursoroff
   EQUB 23,1,0,0,0,0,0,0,0,0         \ VDU 23,1,0;0;0;0; (cursor off)
 .h_pname
