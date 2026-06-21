@@ -32,7 +32,7 @@ VGCDIR = os.path.join(HERE, "vgc")
 
 def vgi_build(unroll):
     B.sh([BEEBASM, "-i", "player.asm", "-D", "TEST=0", "-D", "RING_PAGE=&C0",
-          "-D", "VGI2=1", "-D", "UNROLL=%d" % unroll, "-d", "-labels",
+          "-D", "VGI2=1", "-D", "UNROLL=%d" % unroll, "-D", "HARNESS=0", "-d", "-labels",
           "labels_full.txt"], cwd=HERE)
     lab = B.labels(os.path.join(HERE, "labels_full.txt"))
     img = open(os.path.join(HERE, "Player"), "rb").read()

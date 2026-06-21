@@ -97,7 +97,7 @@ def bench_one(vgm):
     # rings up at &C000 so even the largest .vgi fits below them in the 64K sim
     # (ring location does not affect cycle counts).
     sh([BEEBASM, "-i", "player.asm", "-D", "TEST=0", "-D", "RING_PAGE=&C0",
-        "-D", "VGI2=1", "-D", "UNROLL=0", "-d", "-labels", "labels_full.txt"], cwd=HERE)
+        "-D", "VGI2=1", "-D", "UNROLL=0", "-D", "HARNESS=0", "-d", "-labels", "labels_full.txt"], cwd=HERE)
     sh([BEEBASM, "-i", "sim_vgc.asm", "-d", "-labels", "vgc_labels.txt"], cwd=VGCDIR)
     nl = labels(os.path.join(HERE, "labels_full.txt"))
     vl = labels(os.path.join(VGCDIR, "vgc_labels.txt"))

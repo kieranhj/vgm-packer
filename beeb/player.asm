@@ -46,6 +46,49 @@ GUARD RING_PAGE*256     \ code + INCBIN data must stay below the rings
 \ entry
 \ ---------------------------------------------------------------------------
 .start
+IF HARNESS
+\ Raster-timing harness (after tom-seddon's cycle_exact_via_poll): MODE 5, print
+\ the player name, then each frame raise the background (logical 0) to a colour
+\ before the player and drop it to black after - the coloured band's height = the
+\ player's per-frame CPU time. Tune loops forever; BREAK to exit.
+IF UNROLL
+RCOL = 6                  \ cyan
+ELSE
+RCOL = 4                  \ blue
+ENDIF
+  LDA #22 : JSR &FFEE : LDA #5 : JSR &FFEE      \ MODE 5
+  LDX #0
+.h_curs
+  LDA h_cursoroff,X : JSR &FFEE : INX : CPX #10 : BNE h_curs
+  LDX #0
+.h_name
+  LDA h_pname,X : BEQ h_named : JSR &FFEE : INX : BNE h_name
+.h_named
+  SEI
+.h_restart
+  JSR init_streams
+  LDA music_data+4 : STA framelo
+  LDA music_data+5 : STA framehi
+.h_loop
+  JSR waitvsync
+  LDA #(RCOL EOR 7) : STA &FE21     \ band on  (logical 0 -> RCOL)
+  JSR do_frame
+  LDA #(0 EOR 7)    : STA &FE21     \ band off (logical 0 -> black)
+  LDA framelo : BNE h_dl
+  DEC framehi
+.h_dl
+  DEC framelo
+  LDA framelo : ORA framehi : BNE h_loop
+  JMP h_restart
+.h_cursoroff
+  EQUB 23,1,0,0,0,0,0,0,0,0         \ VDU 23,1,0;0;0;0; (cursor off)
+.h_pname
+IF UNROLL
+  EQUS "VGI UNROLLED (cyan)", 13, 0
+ELSE
+  EQUS "VGI LOOPED (blue)", 13, 0
+ENDIF
+ELSE
 IF TEST
   JSR init_streams
   LDA #LO(OUTBUF) : STA outp
@@ -96,6 +139,7 @@ ELSE
   LDA #&FF : JSR sn
   CLI
   RTS
+ENDIF
 ENDIF
 
 \ ---------------------------------------------------------------------------

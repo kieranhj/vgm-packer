@@ -80,6 +80,31 @@ Note: this is decode-only. Real per-frame totals add each player's sound writes 
 VGI writes all 11 registers every frame, VGC only the ones that changed (RLE), so
 VGC's sound cost is lower; that is a separate, real difference, not measured here.
 
+## Raster-timing demo discs (`build_raster.sh`)
+
+Four bootable discs, one per player, all playing the same tune (U_LOADER), built
+on a raster harness adapted from tom-seddon's `cycle_exact_via_poll`. Each boots
+to MODE 5, prints the player's name, and every frame raises the background colour
+before the player call and drops it to black after — so the height of the
+coloured band = that player's per-frame CPU time. A different colour per player:
+
+| disc | player | band colour |
+|---|---|---|
+| `raster_vgi.ssd` | VGI looped | blue |
+| `raster_vgi_unroll.ssd` | VGI unrolled | cyan |
+| `raster_vgc.ssd` | VGC original | red |
+| `raster_vgcopt.ssd` | VGC-opt | yellow |
+
+Run them in jsbeeb (Model B) — open all four to compare the band heights; VGC's
+band jitters frame-to-frame (RLE spikes), the VGI bands sit nearly still:
+
+- VGI looped:   https://bbc.xania.org/?autoboot&disc1=https://raw.githubusercontent.com/kieranhj/vgm-packer/player/beeb/raster_vgi.ssd
+- VGI unrolled: https://bbc.xania.org/?autoboot&disc1=https://raw.githubusercontent.com/kieranhj/vgm-packer/player/beeb/raster_vgi_unroll.ssd
+- VGC original: https://bbc.xania.org/?autoboot&disc1=https://raw.githubusercontent.com/kieranhj/vgm-packer/player/beeb/raster_vgc.ssd
+- VGC-opt:      https://bbc.xania.org/?autoboot&disc1=https://raw.githubusercontent.com/kieranhj/vgm-packer/player/beeb/raster_vgcopt.ssd
+
+Rebuild with `./build_raster.sh [path/to/tune.vgm]`.
+
 ## The `.vgi` format
 
 11 register columns (one per SN76489 register), each compressed independently
