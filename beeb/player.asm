@@ -225,8 +225,104 @@ ENDIF
   RTS
 
 IF TEST = 0
+IF UNROLL
 \ ---------------------------------------------------------------------------
-\ one frame: decode all 11 streams, then write the SN76489
+\ Tier 3 (-D UNROLL=1): per-stream decode fully inlined, with a CONSTANT ring
+\ page (abs,Y, no pointer setup) and no JSR/RTS or loop overhead on the common
+\ match/run path. The rare new-token parse is shared in `newtoken` (X=stream).
+\ Costs ~1 KB more code; cuts the decode floor substantially.
+\ ---------------------------------------------------------------------------
+.newtoken                \ X=stream, st_rem[X]==0 on entry; parse next token; RTS
+  JSR fetchbyte
+  CMP #&80
+  BCC nt_lit
+  CMP #&C0
+  BCC nt_run
+  AND #&3f
+  CMP #&3f
+  BNE nt_m_short
+  JSR fetchbyte : STA st_rem,X
+  JMP nt_m_off
+.nt_m_short
+  CLC : ADC #2 : STA st_rem,X
+.nt_m_off
+  JSR fetchbyte : STA tmp
+  LDA st_head,X : SEC : SBC tmp : STA st_copy,X
+  LDA #&80 : STA st_flag,X
+  RTS
+.nt_run
+  AND #&3f
+  CMP #&3f
+  BNE nt_r_short
+  JSR fetchbyte : STA st_rem,X
+  JMP nt_r_set
+.nt_r_short
+  CLC : ADC #2 : STA st_rem,X
+.nt_r_set
+  LDA st_head,X : SEC : SBC #1 : STA st_copy,X
+  LDA #&80 : STA st_flag,X
+  RTS
+.nt_lit
+  AND #&7f : CLC : ADC #1 : STA st_rem,X
+  LDA #0 : STA st_flag,X
+  RTS
+
+MACRO VGI_DECODE strm     \ decode one byte from stream `strm` -> A
+{
+  rbase = (RING_PAGE + strm) * 256
+  LDA st_rem + strm
+  BNE have
+  LDX #strm : JSR newtoken
+.have
+  LDA st_flag + strm
+  BPL lit
+  LDY st_copy + strm      \ match/run: copy from ring (constant page)
+  LDA rbase, Y
+  INC st_copy + strm
+  LDY st_head + strm
+  STA rbase, Y
+  INC st_head + strm
+  DEC st_rem + strm
+  JMP done
+.lit
+  LDX #strm : JSR fetchbyte
+  LDY st_head + strm
+  STA rbase, Y
+  INC st_head + strm
+  DEC st_rem + strm
+.done
+}
+ENDMACRO
+
+.do_frame
+  VGI_DECODE 0
+  ORA #&80 : JSR sn        \ tone0 freq lo (latch)
+  VGI_DECODE 1
+  JSR sn                   \ tone0 freq hi (data byte)
+  VGI_DECODE 2
+  ORA #&A0 : JSR sn        \ tone1 freq lo
+  VGI_DECODE 3
+  JSR sn
+  VGI_DECODE 4
+  ORA #&C0 : JSR sn        \ tone2 freq lo
+  VGI_DECODE 5
+  JSR sn
+  VGI_DECODE 6
+  CMP #SKIP : BEQ uf_nonoise
+  ORA #&E0 : JSR sn        \ noise control (only when changed)
+.uf_nonoise
+  VGI_DECODE 7
+  ORA #&90 : JSR sn        \ vol0
+  VGI_DECODE 8
+  ORA #&B0 : JSR sn        \ vol1
+  VGI_DECODE 9
+  ORA #&D0 : JSR sn        \ vol2
+  VGI_DECODE 10
+  ORA #&F0 : JSR sn        \ vol3 (noise)
+  RTS
+ELSE
+\ ---------------------------------------------------------------------------
+\ one frame: decode all 11 streams, then write the SN76489 (looped)
 \ ---------------------------------------------------------------------------
 .do_frame
   LDX #0
@@ -249,6 +345,7 @@ IF TEST = 0
   LDA regbuf+9  : ORA #&D0 : JSR sn      \ vol2
   LDA regbuf+10 : ORA #&F0 : JSR sn      \ vol3 (noise)
   RTS
+ENDIF
 
 \ ---------------------------------------------------------------------------
 \ wait for vertical sync by polling System VIA IFR bit 1 (CA1 = 6845 vsync)
@@ -266,13 +363,18 @@ IF TEST = 0
 \ interrupts are disabled for the whole tune so the OS keyboard scan cannot
 \ collide on port A.
 \ ---------------------------------------------------------------------------
-.sn
+\ Tier 2: no busy-wait. This is the hardware-proven sequence from the shipped
+\ vgm-player-bbc sn_write - the ~6-cycle read-back of &FE40 is enough /WE settle
+\ on a real BBC, so the old ~120-cycle delay loop is removed (~1.3 kcyc/frame).
+.sn                     \ A = data byte to SN76489 (clobbers X)
+  LDX #&FF
+  STX &FE43             \ DDRA = all outputs (sound data bus)
   STA &FE4F             \ data byte onto port A
-  LDA #0  : STA &FE40   \ latch line 0 -> 0 : sound write enable low
-  LDX #&18
-.sn_d
-  DEX : BNE sn_d        \ hold ~ a few us for the slow sound chip
-  LDA #8  : STA &FE40   \ latch line 0 -> 1 : write enable high
+  INX                   \ X = 0
+  STX &FE40             \ latch line 0 -> 0 : /WE low
+  LDA &FE40             \ read-back = settle (~6 cycles, proven sufficient)
+  ORA #8
+  STA &FE40             \ latch line 0 -> 1 : /WE high (latches the write)
   RTS
 
 .banner

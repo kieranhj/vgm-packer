@@ -25,7 +25,8 @@ def build_and_measure(vgm, vgi2):
     with contextlib.redirect_stdout(io.StringIO()):
         v1.pack(vgm, os.path.join(HERE, "music.vgi"), version=2 if vgi2 else 1)
     B.sh([BEEBASM, "-i", "player.asm", "-D", "TEST=0", "-D", "RING_PAGE=&C0",
-          "-D", "VGI2=%d" % (1 if vgi2 else 0), "-d", "-labels", "labels_full.txt"], cwd=HERE)
+          "-D", "VGI2=%d" % (1 if vgi2 else 0), "-D", "UNROLL=0",
+          "-d", "-labels", "labels_full.txt"], cwd=HERE)
     lab = B.labels(os.path.join(HERE, "labels_full.txt"))
     img = open(os.path.join(HERE, "Player"), "rb").read()
     nf = img[lab["music_data"] - 0x1900 + 4] | (img[lab["music_data"] - 0x1900 + 5] << 8)

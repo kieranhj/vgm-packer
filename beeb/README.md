@@ -17,17 +17,18 @@ single frame and the per-frame cost is bounded *independently of match length*.
 
 ## Result (measured in simulation, default v2 build)
 
-| check | result |
-|---|---|
-| decoder vs source (`sim_test.py`, 512 frames × 11 streams) | **PASS** — byte-exact |
-| full player SN76489 output (`sim_test_player.py`, 200 frames) | **PASS** — byte-exact |
-| per-frame cost incl. sound (`measure_cycles.py`) | **min 2886 / mean 2922 / max 4294 cycles** |
-| worst frame vs 50 Hz budget (40000 cyc @ 2 MHz) | **10.7%** |
+Decoder + full player SN76489 output are byte-exact (`sim_test.py` /
+`sim_test_player.py`). Per-frame cost incl. sound (`measure_cycles.py`), after the
+optimisations in `OPTIMISATION_PLAN.md`:
 
-The worst frame is when many streams start a new token at once (and one reads an
-extended-length byte); it is still a small, bounded fraction of the frame. The
-decode-only figure (sound stubbed) is min 1466 / max 3064 — see
-`COMPRESSION_REPORT.md`.
+| build | min | mean | max | worst vs 50 Hz |
+|---|--:|--:|--:|--:|
+| looped (default, `music.ssd`) | 1468 | 1506 | 2876 | 7.2% |
+| unrolled (`-D UNROLL=1`, `music_unroll.ssd`) | 983 | 1025 | 2487 | 6.2% |
+
+Down from 2922 mean / 4294 max before optimisation. The unrolled build is faster
+(decode floor 673 vs 1158) at +672 bytes of code; the looped build is the compact
+default. See `OPTIMISATION_PLAN.md` for the cycle analysis and tier breakdown.
 
 ### vs the existing VGC player (full corpus, `bench_all.py`)
 
@@ -146,7 +147,9 @@ touch larger than VGC's RLE+LZ4 but trivially bounded to decode (see §8.9/P4f).
   with self-verifying round-trips (a plain decoder and a faithful ring model).
 - `player.asm` — the 6502 player (BeebAsm). `-D TEST=1` builds a harness that
   decodes into a buffer for the simulator; `-D TEST=0` builds the real, bootable
-  player. `-D VGI2=1` (the default build) decodes v2; `-D VGI2=0` decodes v1.
+  player. `-D VGI2=1` (default) decodes v2; `-D VGI2=0` decodes v1. `-D UNROLL=1`
+  builds the faster unrolled decoder (+~0.7 KB code); default `UNROLL=0` is the
+  compact looped build. (`UNROLL=1 ./build.sh` builds the unrolled disc.)
 - `sim_test.py` / `sim_test_player.py` / `measure_cycles.py` — py65 checks.
 - `sim_compare.py` / `sim_vgc.asm` — per-frame cycle comparison vs the existing
   VGC player (needs a `vgm-player-bbc` checkout; see below).
@@ -156,7 +159,9 @@ touch larger than VGC's RLE+LZ4 but trivially bounded to decode (see §8.9/P4f).
   led to v2 becoming the default: 8.3% smaller for an unchanged decode profile.
   See `COMPRESSION_REPORT.md`.
 - `build.sh` — pack, run all checks, build the disc.
-- `music.ssd` — bootable 200 KB disc image (Ghost House, ~51 s, v2 format).
+- `music.ssd` — bootable 200 KB disc (Ghost House, ~51 s, v2, looped decoder).
+- `music_unroll.ssd` — same tune with the faster unrolled decoder (`-D UNROLL=1`).
+- `OPTIMISATION_PLAN.md` — runtime cycle analysis and the optimisation tiers.
 
 ## Build / test
 

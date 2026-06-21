@@ -5,22 +5,23 @@ set -e
 
 BEEBASM=${BEEBASM:-beebasm}
 VGM=${1:-../vgm/Ghost House (Tobikomi Remix).bbc.vgm}
+UNROLL=${UNROLL:-0}        # set UNROLL=1 for the faster, larger Tier-3 decoder
 
 echo "== pack =="
 python pack_vgi.py "$VGM" -o music.vgi
 
-echo "== sim: decoder =="
-"$BEEBASM" -i player.asm -D TEST=1 -D RING_PAGE=96 -D VGI2=1 -d -labels labels.txt
+echo "== sim: decoder ==  (UNROLL=$UNROLL)"
+"$BEEBASM" -i player.asm -D TEST=1 -D RING_PAGE=96 -D VGI2=1 -D UNROLL=$UNROLL -d -labels labels.txt
 python sim_test.py
 
 echo "== sim: full player path =="
-"$BEEBASM" -i player.asm -D TEST=0 -D RING_PAGE=96 -D VGI2=1 -d -labels labels_full.txt
+"$BEEBASM" -i player.asm -D TEST=0 -D RING_PAGE=96 -D VGI2=1 -D UNROLL=$UNROLL -d -labels labels_full.txt
 python sim_test_player.py
 python measure_cycles.py
 
 echo "== build bootable disc =="
 rm -f music.ssd
-"$BEEBASM" -i player.asm -D TEST=0 -D RING_PAGE=96 -D VGI2=1 -do music.ssd -boot Player -title GHOSTV2 -opt 3
+"$BEEBASM" -i player.asm -D TEST=0 -D RING_PAGE=96 -D VGI2=1 -D UNROLL=$UNROLL -do music.ssd -boot Player -title GHOSTV2 -opt 3
 # pad to a standard 200 KB (80-track SS) image
 python - <<'PY'
 import os
