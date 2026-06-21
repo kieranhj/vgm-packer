@@ -14,7 +14,6 @@ import contextlib
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import pack_vgi as v1
-import pack_vgi2 as v2
 import explore_vgi as ex
 
 CACHE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_cache")
@@ -43,7 +42,7 @@ def main():
         with contextlib.redirect_stdout(io.StringIO()):
             cols, nf, rate = v1.build_columns(f)
             d1, _ = v1.pack(f, "/tmp/_m.vgi", version=1)
-            d2, _ = v2.pack(f, None)
+            d2, _ = v1.pack(f, None, version=2)
         opt = opt_only_size([bytes(c) for c in cols], nf)
         vgcp = os.path.join(CACHE, name.replace(" ", "_") + ".vgc")
         # cached_vgc used a regex-sanitised name; fall back to glob if needed

@@ -120,8 +120,8 @@ zero page **7 B** unchanged.
 ## Recommendation
 
 - **Adopt v2.** 8.3% smaller for an unchanged decode profile, +58 B code, no extra
-  RAM. Build the player with `-D VGI2=1`, pack with `pack_vgi2.py`. A v2 test disc
-  is included (`music_v2.ssd`).
+  RAM. This is now the default: `pack_vgi.py` emits v2 and the player builds with
+  `-D VGI2=1`. A v2 test disc is included (`music.ssd`).
 - **Take the optimal parse regardless** — even in the v1 format it's a free 1.9%
   (the decoder is byte‑for‑byte identical).
 - **If more RAM is available**, a 16‑bit‑offset / larger‑window mode reaches

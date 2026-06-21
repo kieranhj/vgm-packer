@@ -13,7 +13,6 @@ import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import bench_all as B
 import pack_vgi as v1
-import pack_vgi2 as v2
 
 HERE = B.HERE
 BEEBASM = B.BEEBASM
@@ -22,12 +21,9 @@ CACHE = B.CACHE
 
 def build_and_measure(vgm, vgi2):
     # pack the right format to music.vgi
-    if vgi2:
-        v2.pack(vgm, os.path.join(HERE, "music.vgi"))
-    else:
-        import io, contextlib
-        with contextlib.redirect_stdout(io.StringIO()):
-            v1.pack(vgm, os.path.join(HERE, "music.vgi"), version=1)
+    import io, contextlib
+    with contextlib.redirect_stdout(io.StringIO()):
+        v1.pack(vgm, os.path.join(HERE, "music.vgi"), version=2 if vgi2 else 1)
     B.sh([BEEBASM, "-i", "player.asm", "-D", "TEST=0", "-D", "RING_PAGE=&C0",
           "-D", "VGI2=%d" % (1 if vgi2 else 0), "-d", "-labels", "labels_full.txt"], cwd=HERE)
     lab = B.labels(os.path.join(HERE, "labels_full.txt"))
