@@ -13,7 +13,8 @@
 
 MIN_MATCH = 2
 SKIP      = &0f
-RINGHI    = &60          \ rings at &6000..&6AFF, one 256-byte page per stream
+RINGHI    = RING_PAGE     \ rings at RING_PAGE..+&0AFF, one 256-byte page/stream
+                          \ pass via -D RING_PAGE=&60 (real player) or &C0 (sim/big tunes)
 
 \ zero page
 fptr      = &70          \ stream read pointer (2)
@@ -28,7 +29,7 @@ KFRAMES   = 512          \ TEST: frames to decode in the simulator
 OUTBUF    = &4000        \ TEST: captured register rows (KFRAMES*11 bytes)
 
 ORG &1900
-GUARD &4000              \ code + INCBIN data must stay well below OUTBUF/rings
+GUARD RING_PAGE*256     \ code + INCBIN data must stay below the rings
 
 \ ---------------------------------------------------------------------------
 \ per-stream state (11 streams)
