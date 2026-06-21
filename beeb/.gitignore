@@ -6,3 +6,8 @@ _cache/
 labels.txt
 labels_full.txt
 music.vgi
+
+# vgc/ build intermediates
+vgc/Vgc
+vgc/labels*.txt
+vgc/ghost.vgc

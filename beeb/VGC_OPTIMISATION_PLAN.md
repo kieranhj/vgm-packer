@@ -49,6 +49,33 @@ On a busy frame (11 decodes) the swap alone is **11 × 164 ≈ 1800 cycles** —
 the main driver of the 5638-cycle spikes, i.e. of the *variance*, not just the
 mean.
 
+## Implemented (`beeb/vgc/`, measured)
+
+The context-swap fix is **done and verified**. `beeb/vgc/vgcplayer_opt.asm` keeps
+each stream's LZ state **resident** instead of swapping it through ZP per byte:
+X holds the stream index for the whole decode; literal/match counts are accessed
+`abs,X` in place; the window buffer is `abs,Y` with its page self-modified once
+per decode and the read/write indices `inc`-ed in place; the window fetch/store
+are inlined (no JSR); only the stream read pointer is loaded once and saved once;
+and because `get_register_data` now preserves X, the `vgm_temp` save/restore is
+gone. `beeb/vgc/measure.py` checks the SN76489 output is **byte-identical** to
+the original and times both.
+
+Measured (Ghost House, 2559 frames; confirmed byte-exact on evil-influences and
+ne7 too):
+
+| | mean | p99 | max | total |
+|---|--:|--:|--:|--:|
+| original | 1538 | 4052 | 5638 | 3,935,747 |
+| optimised | **1172** | **2931** | **4840** | 2,998,368 |
+| speedup | **1.31×** | 1.38× | 1.16× | 1.31× |
+
+~24% off the mean and ~14% off the worst frame, for +0 RAM and *less* code (627
+vs 757 bytes — the swap code was bigger than the resident accessors). That cuts
+the per-decode swap from 164 to ~70 cycles. The remaining headroom is the
+~70-cycle per-decode setup (window-page SMC + pointer load/save), which only a
+full per-stream **unroll** removes (Tier A1 below) — the bigger, +~1 KB step.
+
 ## Plan, ranked by cycles saved
 
 ### Tier A — eliminate (or shrink) the context swap  ← biggest win
