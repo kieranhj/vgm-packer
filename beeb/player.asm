@@ -142,7 +142,53 @@ ENDIF
   LDA st_rem,X
   BNE produce            \ still inside a run -> just emit the next byte
   JSR fetchbyte          \ new command byte (flags reflect fetchbyte's INC, not A,
-  CMP #&80               \  so test the returned byte explicitly)
+                         \  so test the returned byte explicitly)
+IF VGI2
+  \ v2 tokens: 0=literal(7-bit), 10=run(off1,6-bit+ext), 11=match(6-bit+ext,off)
+  CMP #&80
+  BCC v2_lit
+  CMP #&C0
+  BCC v2_run
+  AND #&3f               \ match length field
+  CMP #&3f
+  BNE v2_m_short
+  JSR fetchbyte          \ ext: full length byte (65..255)
+  STA st_rem,X
+  JMP v2_m_off
+.v2_m_short
+  CLC : ADC #2           \ len = field+2 (2..64)
+  STA st_rem,X
+.v2_m_off
+  JSR fetchbyte          \ offset
+  STA tmp
+  LDA st_head,X
+  SEC : SBC tmp
+  STA st_copy,X
+  LDA #&80 : STA st_flag,X
+  JMP produce
+.v2_run
+  AND #&3f               \ run length field
+  CMP #&3f
+  BNE v2_r_short
+  JSR fetchbyte
+  STA st_rem,X
+  JMP v2_r_set
+.v2_r_short
+  CLC : ADC #2
+  STA st_rem,X
+.v2_r_set
+  LDA st_head,X
+  SEC : SBC #1           \ offset 1 (repeat last byte), no offset byte read
+  STA st_copy,X
+  LDA #&80 : STA st_flag,X
+  JMP produce
+.v2_lit
+  AND #&7f : CLC : ADC #1
+  STA st_rem,X
+  LDA #0 : STA st_flag,X
+  JMP produce
+ELSE
+  CMP #&80               \ v1 tokens: 0=literal(7-bit), 1=match(7-bit+off)
   BCS dmatch
   AND #&7f               \ literal run length-1
   CLC : ADC #1
@@ -159,6 +205,7 @@ ENDIF
   SEC : SBC tmp          \ ring read index = head - offset
   STA st_copy,X
   LDA #&80 : STA st_flag,X
+ENDIF
 .produce
   LDA st_flag,X
   BMI dcopy
