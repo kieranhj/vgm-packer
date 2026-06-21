@@ -744,20 +744,25 @@ matches. **Measured per-frame cost: min 2886 / mean 2924 / max 3927 cycles** —
 is bounded and ~independent of match length. A bootable disc (`beeb/music.ssd`, Ghost House,
 ~51 s) is included; only the sound-chip /WE strobe timing remains to be confirmed on hardware.
 
-**Head-to-head vs the existing VGC player** (`beeb/sim_compare.py`, same tune, same simulator,
-SN write stubbed in both so only decode + register reconstruction is timed):
+**Head-to-head vs the existing VGC player, full corpus** (`beeb/bench_all.py`: both players
+through the same py65 cycle measurement on all 11 tunes, SN write stubbed in both so only
+decode + register reconstruction is timed). Fixed footprint: incremental = 536 B code + 2816 B
+buffers (11×256) + 7 zp = **3359 B**; VGC = 768 B code + 2048 B buffers (8×256) + 8 zp =
+**2824 B**. Per-frame cost (cycles, 50 Hz budget = 40000) and compressed size:
 
-| per-frame decode (2559 frames) | min | mean | max | spread |
-|---|--:|--:|--:|--:|
-| incremental (`.vgi`) | 1466 | 1548 | **2503** | **1037** |
-| existing VGC (8× LZ4 + RLE) | 294 | 1521 | **4814** | **4520** |
+| | `.vgi` total | `.vgc` total | incr worst frame | VGC worst frame | incr mean range | VGC mean range |
+|---|--:|--:|--:|--:|--:|--:|
+| corpus (74052 frames) | 122,101 | 80,108 | **2787 (7.0%)** | **5396 (13.5%)** | 1508–1600 | 996–2557 |
 
-The means are within 2%, but the incremental decoder's **worst frame is ~half VGC's** (2503 vs
-4814 cycles) with **~4.4× tighter spread**. VGC is near-free when its streams sit in an RLE run
-(min 294) but spikes when several streams refill their LZ4 at once — the variable per-frame cost
-of §3, now measured. So the incremental scheme buys a *bounded* ceiling (the thing a
-timing-critical demo budgets against) at no mean-cost penalty — exactly what §12.4 set out to
-show.
+Three clear results: (1) **size** — `.vgi` is **1.52× larger** than `.vgc` (flat per-column LZSS
+vs RLE+LZ4 is the price of the simpler decoder); (2) **worst-case decode** — the incremental
+player is **bounded and flat at ≤2787 cycles (≤7.0%) on every tune**, consistently **~half** the
+VGC player's 4814–5396 (≤13.5%) spikes (which occur when several streams refill their LZ4 at
+once — the §3 variable cost, now measured); (3) **mean decode** — the incremental mean is
+rock-steady (~1550) while VGC's is data-dependent (cheap on repetitive tunes via RLE-run skips,
+dearer on busy ones). So the incremental scheme trades ~1.5× storage (and ~0.5 KB RAM) for a
+bounded, predictable worst case — exactly what a timing-critical, single-bank player budgets
+against. Full per-tune table in `beeb/README.md`.
 
 ---
 
