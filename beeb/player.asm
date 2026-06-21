@@ -102,6 +102,7 @@ ENDIF
 \ init the 11 stream pointers/state from the .vgi header
 \ ---------------------------------------------------------------------------
 .init_streams
+  LDA #0 : STA ringptr          \ ring pointer low byte is always 0 (page-aligned)
   LDX #0
 .is_loop
   TXA : ASL A : TAY              \ Y = stream*2
@@ -207,26 +208,20 @@ ELSE
   LDA #&80 : STA st_flag,X
 ENDIF
 .produce
+  TXA : CLC : ADC #RINGHI : STA ringptr+1   \ ring page for this stream (once; lo=0)
   LDA st_flag,X
   BMI dcopy
-  JSR fetchbyte          \ literal byte
+  JSR fetchbyte          \ literal byte -> A
   JMP dstore
 .dcopy
-  LDA #0 : STA ringptr
-  TXA : CLC : ADC #RINGHI : STA ringptr+1
   LDY st_copy,X
-  LDA (ringptr),Y
+  LDA (ringptr),Y        \ A = copied byte
   INC st_copy,X
-.dstore
-  STA tmp                \ the decoded byte
-  LDA #0 : STA ringptr
-  TXA : CLC : ADC #RINGHI : STA ringptr+1
+.dstore                  \ A = decoded byte (kept in A through to the return)
   LDY st_head,X
-  LDA tmp
   STA (ringptr),Y
   INC st_head,X
   DEC st_rem,X
-  LDA tmp
   RTS
 
 IF TEST = 0
