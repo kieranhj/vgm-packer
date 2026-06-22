@@ -102,6 +102,45 @@ not dearer. Encoder uses an optimal (DP) parse. Both a reference decoder and a
 | vs v1 | 1.000× | 0.981× | **0.917×** | 0.656× |
 | vs .vgc | 1.52× | 1.50× | **1.40×** | 1.00× |
 
+### In‑RAM footprint per player (data + code + buffer)
+
+Total resident bytes to play each tune with each player = compressed data (the
+`v2`/`.vgc` columns above) **+** player code **+** decode buffer. Fixed overheads,
+measured from the built binaries (zero page, 7–8 B, excluded — it lives in page 0,
+not the bank):
+
+| player | code | buffer | code+buffer |
+|---|--:|--:|--:|
+| VGI looped (default) | 580 | 2816 (11×256) | 3396 |
+| VGI unrolled (`UNROLL=1`) | 1252 | 2816 (11×256) | 4068 |
+| VGC original | 757 | 2048 (8×256) | 2805 |
+| VGC‑opt (`OPT=1`) | 691 | 2048 (8×256) | 2739 |
+
+The **fits 16K?** box is ticked when *at least one* player gets the whole tune
+(data + code + buffer) into a single 16 KB sideways bank (16384 B). The buffer is
+page‑aligned, so a real layout adds ≤255 B of padding between code and buffer;
+that gap is ignored here.
+
+| tune | VGI looped | VGI unrolled | VGC orig | VGC‑opt | fits 16K? |
+|---|--:|--:|--:|--:|:--:|
+| evil‑influences | 32154 | 32826 | 22890 | 22824 | ☐ |
+| BotB Slimeball | 12710 | 13382 | 8479 | 8413 | ☑ |
+| Collision Chaos | 7610 | 8282 | 5014 | 4948 | ☑ |
+| Diagonals | 18361 | 19033 | 14373 | 14307 | ☑ |
+| Ghost House | 6985 | 7657 | 5475 | 5409 | ☑ |
+| U_LOADER | 6411 | 7083 | 6342 | 6276 | ☑ |
+| VE3 | 27170 | 27842 | 21333 | 21267 | ☐ |
+| intro_test | 4843 | 5515 | 3576 | 3510 | ☑ |
+| main_test | 12430 | 13102 | 9599 | 9533 | ☑ |
+| ne7‑magic_beans | 12663 | 13335 | 8513 | 8447 | ☑ |
+| outro_test | 7991 | 8663 | 5369 | 5303 | ☑ |
+
+9 of the 11 tunes fit a single 16 KB bank with at least one player (always the
+smaller `.vgc`‑based VGC players first — VGC‑opt is the smallest in every row).
+Only the two largest, **evil‑influences** (~28–32 KB) and **VE3** (~21–28 KB),
+overflow with every player and would need bank‑switched streaming. The VGI players
+never decide a row on their own here: where VGI fits, VGC already did.
+
 ### Runtime — per-frame decode cost (cycles; SN write stubbed; budget 40000)
 
 | | p50 | p90 | p99 | p99.9 | max | mean |
