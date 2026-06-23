@@ -54,6 +54,37 @@ vgmpacker.py music.vgm -o music.vgc
 
 ---
 
+## The `.vgi` format (incremental decode, bounded per-frame cost)
+
+> Note: `vgipacker.py` and `docs/vgi-format.md` were produced with the
+> assistance of an AI model (Claude Opus 4.8 / `claude-opus-4-8`). Each file
+> carries an AI-generated banner.
+
+`vgipacker.py` is a sibling packer that emits a `.vgi` file instead of `.vgc`.
+Both compress the same SN76489 register data; they differ in the *decode-cost
+profile* on the 6502:
+
+* `.vgc` runs **RLE + LZ4** per stream — smallest on disc, but the decoder
+  **spikes** (cheap RLE-counter frames, occasional expensive LZ4 refills).
+* `.vgi` runs a tiny byte-aligned **LZSS per register column with no RLE**,
+  decoded **one value per stream per frame**, so the per-frame cost is **bounded
+  independently of match/run length** — low, flat and predictable. It is ~1.4×
+  the size of `.vgc`; that is the price of dropping the RLE layer that causes
+  the spikes.
+
+```
+python vgipacker.py music.vgm -o music.vgi      # v2 format (default)
+python vgipacker.py music.vgm -o music.vgi --v1 # original greedy format
+```
+
+The format (token encoding, file layout, self-verification) and the full corpus
+size comparison are documented in [`docs/vgi-format.md`](docs/vgi-format.md).
+The matching 6502 player and the playback-cost study live in the
+[vgm-player-bbc](https://github.com/simondotm/vgm-player-bbc) project
+(`lib/vgiplayer.asm`).
+
+---
+
 ## How it works
 ### An Overview of VGM files for SN76489
 
