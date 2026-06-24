@@ -1,38 +1,77 @@
 #!/usr/bin/env python
-# pack_vgi.py - pack a VGM into the ".vgi" incremental-decode format used by the
-# 6502 prototype player (docs/compression-analysis.md sec 12.4).
+# ******************************************************************
+# AI-GENERATED CODE
+# ------------------------------------------------------------------
+# vgipacker.py - pack an SN76489 PSG VGM into the ".vgi" incremental-
+# decode format. Generated with the assistance of an AI model:
+# Claude Opus 4.8 (claude-opus-4-8).
+# ******************************************************************
 #
-# The format validates the single-bank, bounded-worst-case claim: 11 register
-# columns, each compressed with a tiny byte-aligned LZSS (<=256 window, 8-bit
-# offsets). The decoder yields exactly ONE byte per stream per frame, so a long
-# match never lands in one frame - per-frame cost is bounded independently of
-# match/run length. No RLE pre-pass here (keeps the decoder a single level; the
-# flat-vs-RLE size cost is small, see sec 8.9 / P4f), except the noise column
-# which keeps the 0x0f "skip" marker so the LFSR is not reset on unchanged
-# frames.
+# WHAT THIS IS
+# ------------
+# vgipacker.py is a sibling of vgmpacker.py. Both pack the same SN76489
+# register data; they differ in what the 6502 decoder has to do per frame:
 #
-# LZSS token stream (per column), decoded against a 256-byte ring of output:
-#   cmd byte, bit7 = 0 : literal run, (cmd & 0x7f)+1 bytes follow verbatim (1..128)
-#   cmd byte, bit7 = 1 : match, length (cmd & 0x7f)+2 (2..129), then 1 offset
-#                        byte (1..255); copy length bytes from head-offset.
-# Each column decodes to exactly nframes bytes, so no end marker is needed.
+#   .vgc (vgmpacker.py) - RLE + LZ4 per stream. Smallest on disc, but the
+#       decoder cost SPIKES: most frames just decrement an RLE counter (cheap),
+#       occasional frames refill several LZ tokens at once (expensive).
+#   .vgi (this script)  - a tiny byte-aligned LZSS per register column, with
+#       NO RLE pre-pass, decoded ONE value per stream per frame. A long match
+#       never lands in a single frame, so the per-frame cost is bounded
+#       *independently of match/run length* - low, flat and predictable, which
+#       is what a timing-critical (raster-budgeted) demo needs.
 #
-# File layout (little-endian), loaded as one blob at a fixed address:
-#   +0  'V','G','I',1            magic + version
-#   +4  nframes (16-bit)
-#   +6  11 x stream offset (16-bit, relative to file start)
-#   +28 the 11 LZSS streams, concatenated
+# .vgi is a touch larger than .vgc (~1.4x on the test corpus) - the price of
+# dropping the RLE layer that causes the spikes. See docs/vgi-format.md for the
+# full rationale, the corpus size comparison and the playback-cost study.
 #
-# Usage: python beeb/pack_vgi.py <in.vgm> [-o out.vgi]
+# Only SN76489 PSG VGM files are supported (same constraint as vgmpacker.py).
+#
+# FORMAT (default "v2"; --v1 emits the original greedy format for comparison)
+# ---------------------------------------------------------------------------
+# 11 register columns (one per SN76489 register), each compressed independently
+# with a byte-aligned LZSS over a 256-byte ring window (8-bit offsets). The
+# noise column keeps the 0x0f "skip" marker so the LFSR is not reset on
+# unchanged frames. Each column decodes to exactly nframes bytes (no end
+# marker). File layout (little-endian, loaded as one blob):
+#
+#   +0   'V','G','I',ver        magic + version (1 or 2)
+#   +4   nframes (16-bit)
+#   +6   11 x stream offset (16-bit, relative to file start)
+#   +28  the 11 LZSS streams, concatenated
+#
+# v1 token stream (per column):
+#   0LLLLLLL            literal run, L+1 bytes follow                  (1..128)
+#   1LLLLLLL off        match, len (L)+2 (2..129), then 1 offset byte  (1..255)
+#
+# v2 token stream (per column) - ~8% smaller for an unchanged decode profile:
+#   0LLLLLLL            literal run, L+1 bytes follow                  (1..128)
+#   10LLLLLL [E]        RUN (offset 1 / repeat last byte):
+#                         LLLLLL<63 -> len = LLLLLL+2 (2..64)
+#                         LLLLLL==63 -> len = E (a full byte, 65..255)
+#                       no offset byte
+#   11LLLLLL [E] off    MATCH: length as above, then one offset byte (1..255)
+# Length is capped at 255 so the player's per-stream run counter stays 8-bit
+# and a token start reads at most cmd+ext+offset = 3 bytes - that is what keeps
+# the worst case bounded. v2 uses an optimal (DP) parse.
+#
+# Both formats are SELF-VERIFIED here: every encoded column is decoded by two
+# independent reference decoders (a plain one and a 256-byte-ring model of the
+# 6502 routine) and asserted to round-trip exactly.
+#
+# Usage:
+#   python vgipacker.py <in.vgm> [-o out.vgi] [--v1]
+#
+# Run from the repo root (it imports the modules/ package, like vgmpacker.py).
 
 import os
 import sys
 import argparse
+import contextlib
 from collections import defaultdict
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from measure_proposal2 import distil, quiet            # noqa: E402
-from vgmpacker import VgmPacker                          # noqa: E402
+from modules.vgmparser import VgmStream
+from vgmpacker import VgmPacker
 
 NOISE_COL = 6
 SKIP = 0x0f
@@ -40,6 +79,36 @@ MIN_MATCH = 2
 MAX_MATCH = 129          # (0x7f)+2
 MAX_LIT = 128            # (0x7f)+1
 MAX_OFF = 255
+
+
+@contextlib.contextmanager
+def _quiet():
+    """The parser/packer are chatty on stdout; hide it while we reuse them."""
+    old = sys.stdout
+    try:
+        with open(os.devnull, "w") as devnull:
+            sys.stdout = devnull
+            yield
+    finally:
+        sys.stdout = old
+
+
+def _distil(vgm_path):
+    """Run the VGM through the standard parser and trim the as_binary() header,
+    yielding the raw interleaved register block + the play rate. This mirrors
+    the front half of VgmPacker.process() (see vgmpacker.py)."""
+    vgm = VgmStream(vgm_path)
+    data_block = vgm.as_binary()
+
+    header_size = data_block[0]
+    play_rate = data_block[1]
+    data_offset = 0
+    if header_size == 5 and play_rate == 50:
+        data_offset = header_size + 1
+        data_offset += data_block[data_offset] + 1     # skip title
+        data_offset += data_block[data_offset] + 1     # skip author
+    # else: no recognised header, leave data_offset = 0 (matches process())
+    return data_block[data_offset:], play_rate
 
 
 def noise_diff(col):
@@ -54,8 +123,24 @@ def noise_diff(col):
     return out
 
 
+def build_columns(vgm_path):
+    """De-interleave the VGM into 11 register columns, applying the noise-skip
+    diff to the noise column. Returns (columns, nframes, play_rate)."""
+    with _quiet():
+        packer = VgmPacker()
+        data_block, rate = _distil(vgm_path)
+        regs = packer.split_raw(data_block, True)
+    nf = len(regs[0])
+    cols = [bytearray(regs[c][:nf]) for c in range(11)]   # trim noise EOF marker
+    cols[NOISE_COL] = noise_diff(cols[NOISE_COL])
+    return cols, nf, rate
+
+
+# ===========================================================================
+# v1 format - the original greedy LZSS. Kept for reference/comparison (--v1).
+# ===========================================================================
 def lzss_encode(data, max_chain=256):
-    """Greedy LZSS in the format above. Self-verified by lzss_decode below."""
+    """Greedy LZSS in the v1 format. Self-verified by lzss_decode below."""
     n = len(data)
     out = bytearray()
     table = defaultdict(list)
@@ -112,7 +197,7 @@ def lzss_encode(data, max_chain=256):
 
 
 def lzss_decode(blob, nout):
-    """Reference decoder (full output). The 6502 player uses a 256-byte ring;
+    """Reference v1 decoder (full output). The 6502 player uses a 256-byte ring;
     since offsets are <=255 that is bit-identical to indexing the full output."""
     out = bytearray()
     i = 0
@@ -132,8 +217,8 @@ def lzss_decode(blob, nout):
 
 
 def lzss_decode_ring(blob, nout):
-    """Incremental ring decoder - a faithful model of the 6502 routine, used as
-    an extra self-check that the ring/state machine reproduces the data."""
+    """Incremental v1 ring decoder - a faithful model of the 6502 routine, an
+    extra self-check that the ring/state machine reproduces the data."""
     ring = bytearray(256)
     head = 0
     rem = 0
@@ -164,25 +249,9 @@ def lzss_decode_ring(blob, nout):
     return bytes(out)
 
 
-def build_columns(vgm_path):
-    packer = VgmPacker()
-    with quiet():
-        data_block, rate = distil(vgm_path)
-        regs = packer.split_raw(data_block, True)
-    nf = len(regs[0])
-    cols = [bytearray(regs[c][:nf]) for c in range(11)]   # trim noise EOF
-    cols[NOISE_COL] = noise_diff(cols[NOISE_COL])
-    return cols, nf, rate
-
-
 # ===========================================================================
-# v2 format (default): offset-1 RUN token + single-byte extended length, with an
-# optimal (DP) parse. ~8% smaller than v1 for an unchanged bounded decode.
-#   0LLLLLLL          literal run, L+1 bytes follow                  (1..128)
-#   10LLLLLL [E]      RUN (offset 1): LLLLLL<63 -> len LLLLLL+2 (2..64),
-#                     ==63 -> len = E (65..255); no offset byte
-#   11LLLLLL [E] off  MATCH: length as above, then one offset byte (1..255)
-# Length capped at 255 (8-bit run counter); a token start reads <=3 bytes.
+# v2 format (default): offset-1 RUN token + single-byte extended length, with
+# an optimal (DP) parse. ~8% smaller than v1 for an unchanged bounded decode.
 # ===========================================================================
 V2_MAXLEN = 255
 V2_MINOFF = 2          # offset 1 is handled by the RUN token
@@ -303,6 +372,7 @@ def v2_encode(data):
 
 
 def v2_decode(blob, nout):
+    """Reference v2 decoder (full output)."""
     out = bytearray(); i = 0
     while len(out) < nout:
         cmd = blob[i]; i += 1
@@ -324,6 +394,7 @@ def v2_decode(blob, nout):
 
 
 def v2_decode_ring(blob, nout):
+    """Incremental v2 ring decoder - a faithful model of the 6502 routine."""
     ring = bytearray(256); head = 0; rem = 0; copy = 0; ismatch = False
     out = bytearray(); i = 0
     while len(out) < nout:
@@ -395,9 +466,10 @@ def pack(vgm_path, out_path, version=2):
 
 
 def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("input")
-    ap.add_argument("-o", "--output")
+    ap = argparse.ArgumentParser(
+        description="Pack an SN76489 VGM into the .vgi incremental-decode format.")
+    ap.add_argument("input", help="input .vgm/.vgz file")
+    ap.add_argument("-o", "--output", help="output .vgi (default: <input>.vgi)")
     ap.add_argument("-1", "--v1", action="store_true",
                     help="emit the original greedy v1 format instead of v2")
     args = ap.parse_args()

@@ -10,8 +10,8 @@ svia_ifr = &FE4D
 
 ORG &70
 GUARD &9f
-INCLUDE "vgcplayer_config.h.asm"
-INCLUDE "vgcplayer.h.asm"
+INCLUDE "../../../vgm-player-bbc/lib/vgcplayer_config.h.asm"
+INCLUDE "../../../vgm-player-bbc/lib/vgcplayer.h.asm"
 
 ORG &1900
 GUARD &5800
@@ -69,9 +69,9 @@ ENDIF
   RTS
 
 IF OPT
-INCLUDE "vgcplayer_opt.asm"
+INCLUDE "../../../vgm-player-bbc/lib/vgcplayer_opt.asm"
 ELSE
-INCLUDE "vgcplayer.asm"
+INCLUDE "../../../vgm-player-bbc/lib/vgcplayer.asm"
 ENDIF
 
 .vgm_buffer_start

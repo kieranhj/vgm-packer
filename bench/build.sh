@@ -1,6 +1,6 @@
 #!/bin/sh
 # Build the incremental-decode player disc and run all simulation checks.
-# Run from the beeb/ directory. Set BEEBASM if beebasm is not on your PATH.
+# Run from the bench/ directory. Set BEEBASM if beebasm is not on your PATH.
 set -e
 
 BEEBASM=${BEEBASM:-beebasm}
@@ -8,7 +8,7 @@ VGM=${1:-../vgm/Ghost House (Tobikomi Remix).bbc.vgm}
 UNROLL=${UNROLL:-0}        # set UNROLL=1 for the faster, larger Tier-3 decoder
 
 echo "== pack =="
-python pack_vgi.py "$VGM" -o music.vgi
+python ../vgipacker.py "$VGM" -o music.vgi
 
 echo "== sim: decoder ==  (UNROLL=$UNROLL)"
 "$BEEBASM" -i player.asm -D TEST=1 -D RING_PAGE=96 -D VGI2=1 -D UNROLL=$UNROLL -D HARNESS=0 -d -labels labels.txt
@@ -20,12 +20,13 @@ python sim_test_player.py
 python measure_cycles.py
 
 echo "== build bootable disc =="
-rm -f music.ssd
-"$BEEBASM" -i player.asm -D TEST=0 -D RING_PAGE=96 -D VGI2=1 -D UNROLL=$UNROLL -D HARNESS=0 -do music.ssd -boot Player -title GHOSTV2 -opt 3
+mkdir -p ../discs
+rm -f ../discs/music.ssd
+"$BEEBASM" -i player.asm -D TEST=0 -D RING_PAGE=96 -D VGI2=1 -D UNROLL=$UNROLL -D HARNESS=0 -do ../discs/music.ssd -boot Player -title GHOSTV2 -opt 3
 # pad to a standard 200 KB (80-track SS) image
 python - <<'PY'
 import os
-p = "music.ssd"
+p = "../discs/music.ssd"
 full = 204800
 sz = os.path.getsize(p)
 if sz < full:

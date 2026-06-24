@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# plot_players.py - from beeb/_cache/players.pkl produce:
+# plot_players.py - from bench/_cache/players.pkl produce:
 #   players_distribution.png : corpus per-frame cost histogram, VGI vs VGI-unroll
 #                              vs VGC-opt (with VGC baseline outline for context)
 #   players_timeseries.png   : per-frame cost over a window of one tune for each
@@ -14,7 +14,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-PKL = os.path.join(HERE, "_cache", "players.pkl")
+PKL = os.path.join(HERE, "..", "bench", "_cache", "players.pkl")
 
 C = {"vgi": "#1f77b4", "vgu": "#2ca02c", "vgc": "#d62728", "vgcopt": "#ff7f0e"}
 LBL = {"vgi": "VGI (looped)", "vgu": "VGI (unrolled)",

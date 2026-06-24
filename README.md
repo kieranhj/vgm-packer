@@ -236,6 +236,36 @@ vgmdump.py music.vgm -o music.raw
 * The `modules` folder contains copies of my Python compression scripts from https://github.com/simondotm/lz4enc-python which is where I'm maintaining the release versions. 
 * The [6502 decoder](https://github.com/simondotm/vgm-player-bbc) currently only supports buffer sizes of 255 bytes, so while you can use the `--buffer` option for experimentation it won't yield `.vgc` files that can be used on the 6502 at the moment. If you attempt this, know that: 1) buffer size > 255 will crash the decoder, and 2) buffer size < 255 will work ok, but you'll just get worse compression for no benefit on the decoder side. _I might look into supporting buffer sizes of 128 or 64 later since it may possible allow reduction of the 2kb workspace to 1kb or 0.5KB._
 
+## Documentation
+
+This is an **experiment branch** for the `.vgi` incremental-decode format and the
+compression R&D behind it. The shipped distillation is `vgipacker.py` (repo root)
+plus the 6502 player `lib/vgiplayer.asm` in the sibling
+[vgm-player-bbc](https://github.com/simondotm/vgm-player-bbc) repo; everything
+else here is the supporting study, organised as:
+
+* `docs/` — design documents
+* `bench/` — measurement & benchmark harnesses (+ the `player.asm` prototype)
+* `plots/` — figure scripts and their `.png` outputs
+* `discs/` — bootable disc images
+
+### Design documents (`docs/`)
+
+| document | what it covers |
+|---|---|
+| [`compression-analysis.md`](docs/compression-analysis.md) | the main study — dissection of SN76489 register data and a sequence of compression proposals, leading to the §12.4 single-bank, bounded-per-frame-cost regime that motivates `.vgi` |
+| [`incremental-player-prototype.md`](docs/incremental-player-prototype.md) | overview of the 6502 incremental-decode prototype: the `.vgi` format, the player, the measured results, and this branch's layout |
+| [`COMPRESSION_REPORT.md`](docs/COMPRESSION_REPORT.md) | the "v2" format study — RUN-token + extended-length + optimal parse cuts `.vgi` ~8% without changing the bounded decode profile |
+| [`OPTIMISATION_PLAN.md`](docs/OPTIMISATION_PLAN.md) | runtime cycle analysis and the optimisation tiers for the incremental player |
+| [`VGC_OPTIMISATION_PLAN.md`](docs/VGC_OPTIMISATION_PLAN.md) | the resident-context VGC player optimisation (basis of `vgcplayer_opt.asm` in vgm-player-bbc) |
+
+### How-to guides
+
+| guide | what it covers |
+|---|---|
+| [`bench/README.md`](bench/README.md) | how to run the benchmarks and simulation checks |
+| [`plots/README.md`](plots/README.md) | how to turn the cached benchmark results into figures |
+
 ## Related Projects
 
 * [Vgm Converter](https://github.com/simondotm/vgm-converter) - My VGM conversion utility 

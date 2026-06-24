@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# beeb/vgc/measure.py - build the VGC player (OPT=0 baseline / OPT=1 optimised),
+# bench/vgc/measure.py - build the VGC player (OPT=0 baseline / OPT=1 optimised),
 # run it in py65 over the whole tune, capture the SN76489 byte stream (for a
 # byte-exact equivalence check) and the per-frame cycle cost. With no args it
 # compares baseline vs optimised.
@@ -17,6 +17,12 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 BEEBASM = os.environ.get("BEEBASM", "beebasm")
 NF = 2559
 RET = 0x9000
+# The VGC players are no longer vendored here - sim.asm INCLUDEs them from the
+# sibling vgm-player-bbc checkout. The OPT=1 (optimised) comparison needs
+# lib/vgcplayer_opt.asm, which lives on that repo's vgc-opt-player branch; if it
+# is not present we build only the OPT=0 baseline.
+VGC_OPT_ASM = os.path.normpath(
+    os.path.join(HERE, "..", "..", "..", "vgm-player-bbc", "lib", "vgcplayer_opt.asm"))
 
 
 def labels(p):
@@ -81,7 +87,7 @@ def main():
     bcap, bpf = run(bimg, blab)
     print("baseline:")
     b = stats("baseline", bpf)
-    if not os.path.exists(os.path.join(HERE, "vgcplayer_opt.asm")):
+    if not os.path.exists(VGC_OPT_ASM):
         print("(no vgcplayer_opt.asm yet)")
         return 0
     oimg, olab = build(1)
@@ -94,7 +100,7 @@ def main():
         print("\nspeedup: mean %.2fx  max %.2fx  total %.2fx  (saved %d cycles over %d frames)" %
               (b.mean() / o.mean(), b.max() / o.max(), b.sum() / o.sum(),
                b.sum() - o.sum(), NF))
-    return 0 if (not os.path.exists(os.path.join(HERE, "vgcplayer_opt.asm")) or ok) else 1
+    return 0 if (not os.path.exists(VGC_OPT_ASM) or ok) else 1
 
 
 if __name__ == "__main__":

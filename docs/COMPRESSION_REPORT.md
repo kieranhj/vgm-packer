@@ -2,7 +2,7 @@
 
 *Investigation report. Goal: shrink the `.vgi` stream (currently 1.52× the size
 of `.vgc`) while preserving VGI's headline property — a low, flat, bounded
-per-frame decode cost (§12.4 of `docs/compression-analysis.md`).*
+per-frame decode cost (§12.4 of `compression-analysis.md`).*
 
 ## TL;DR
 
@@ -171,7 +171,7 @@ zero page **7 B** unchanged.
 ## Reproduce
 
 ```sh
-cd beeb
+cd bench
 python measure_v2.py            # size table (v1 / opt / v2 / vgc)
 python measure_v2_runtime.py    # per-frame cost, v1 vs v2 (needs vgm-player-bbc)
 python plot_v2.py               # v2_cost_distribution.png

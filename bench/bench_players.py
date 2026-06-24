@@ -21,7 +21,7 @@ import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import bench_all as B
-import pack_vgi
+import vgipacker as pack_vgi
 
 HERE = B.HERE
 ROOT = B.ROOT

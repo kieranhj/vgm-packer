@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # plot_v2.py - overlay the per-frame decode-cost distribution of the v1 and v2
 # players (from measure_v2_runtime.py) to show v2 keeps the tight/bounded shape
-# while being smaller. Reads beeb/_cache/v2_runtime.pkl.
+# while being smaller. Reads bench/_cache/v2_runtime.pkl.
 import os
 import pickle
 import sys
@@ -12,7 +12,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-PKL = os.path.join(HERE, "_cache", "v2_runtime.pkl")
+PKL = os.path.join(HERE, "..", "bench", "_cache", "v2_runtime.pkl")
 OUT = os.path.join(HERE, "v2_cost_distribution.png")
 
 

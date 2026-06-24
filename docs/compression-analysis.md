@@ -668,7 +668,7 @@ Ordered by value-per-effort given §8.6. Items 1–2 need no external tools.
    measured on hardware/emulator.
 
 6. **Incremental-decode worst-case model for the single-bank regime (§12.4).** ✅ **Done** —
-   6502 prototype in `beeb/` (player + packer + py65 verification). Decoder byte-exact in
+   6502 prototype in `bench/` (player + packer + py65 verification). Decoder byte-exact in
    simulation; **measured worst-case per-frame cost 3927 cycles = 9.8% of the 50 Hz budget**,
    bounded and ~independent of match length. Remaining: confirm the sound-chip /WE strobe timing
    on real hardware/emulator (the one thing the simulator can't exercise).
@@ -697,10 +697,10 @@ Ordered by value-per-effort given §8.6. Items 1–2 need no external tools.
 - `measure_delta.py` — delta pre-coding harness (§8.9; needs ZX0 for its ZX0 columns).
 - `measure_patterns.py` — pattern-grid recovery harness (§8.10; pure Python).
 - `analyse_registers.py` — descriptive stats (§8.6–§8.8); the place to start new analysis.
-- `beeb/` — 6502 incremental-decode player prototype for §12.4 (BeebAsm + packer + py65 tests +
-  bootable `music.ssd`); see `beeb/README.md`.
+- `bench/` — 6502 incremental-decode player prototype for §12.4 (BeebAsm + packer + py65 tests +
+  bootable `music.ssd`); see `incremental-player-prototype.md`.
 - `vgm/` — the 11-file corpus (committed); `vgm/_cache/` — artifacts (gitignored).
-- `docs/compression-analysis.md` — this document.
+- `compression-analysis.md` — this document.
 
 ### 12.4 The single-bank, bounded-worst-case regime (no runtime decompression)
 
@@ -735,16 +735,16 @@ only is 4× too big (§8), and pattern recovery loses to VGC (§8.10). Those tun
 either the decompress-once regime (give up "no decompression"), multi-bank storage (give up
 "one bank"), or upstream re-authoring shorter / as native pattern data (§8.10).
 
-**Prototype built and certified (item 6, done).** `beeb/` contains a 6502 player for this
+**Prototype built and certified (item 6, done).** `bench/` contains a 6502 player for this
 regime (BeebAsm) plus a Python packer (`.vgi` = 11 per-register columns, each a byte-aligned
 LZSS over a 256-byte ring, 8-bit offsets, decoded one value per stream per frame). Verified in a
 py65 6502 simulation: the decoder is byte-exact vs the source, and the full SN76489 output
 matches. **Measured per-frame cost: min 2886 / mean 2924 / max 3927 cycles** — the worst frame is
 **9.8% of the 50 Hz budget** (40000 cyc @ 2 MHz), with a 1041-cycle spread, confirming the cost
-is bounded and ~independent of match length. A bootable disc (`beeb/music.ssd`, Ghost House,
+is bounded and ~independent of match length. A bootable disc (`discs/music.ssd`, Ghost House,
 ~51 s) is included; only the sound-chip /WE strobe timing remains to be confirmed on hardware.
 
-**Head-to-head, all players, full corpus** (`beeb/bench_players.py`: the same py65 measurement
+**Head-to-head, all players, full corpus** (`bench/bench_players.py`: the same py65 measurement
 over the 11 tunes / 74052 frames, SN write stubbed in *every* player — now apples-to-apples
 since they all share the same no-delay `sn`). Per-frame decode-cost percentiles (cycles; 50 Hz
 budget = 40000):
@@ -756,11 +756,11 @@ budget = 40000):
 | VGC-opt (resident context) | 1143 | 2168 | 2855 | 3345 | 4624 |
 | VGC original | 1557 | 2995 | 3872 | 4307 | 5396 |
 
-The story (figs `beeb/players_distribution.png`, `beeb/players_timeseries.png`): the VGI players
+The story (figs `plots/players_distribution.png`, `plots/players_timeseries.png`): the VGI players
 are **flat and bounded** (unrolled never exceeds 2404; looped 2770), while both VGC players are
 **spiky** — cheap on RLE-run frames, expensive when several streams refill an LZ token at once.
 Optimising VGC — eliminating its per-decoded-byte zero-page context swap, see
-`beeb/VGC_OPTIMISATION_PLAN.md` — cut the original's median 1557→1143 and max 5396→4624 (and its
+`VGC_OPTIMISATION_PLAN.md` — cut the original's median 1557→1143 and max 5396→4624 (and its
 code) for byte-identical output, but the spikes remain. **VGI-unrolled is fastest and most
 predictable on every metric;** VGC-opt's median actually undercuts VGI-looped (RLE lets it skip
 most decodes) but its worst case is still ~1.7–1.9× VGI's. Footprints: VGI looped 580 B /
@@ -769,7 +769,7 @@ is reversed — `.vgi` is ~1.4× `.vgc` (RLE+LZ4 packs tighter). VGI buys a boun
 per-frame cost; VGC buys smaller files. (Decode-only; real totals add each player's sound writes —
 VGI writes all 11 registers/frame, VGC only the changed ones via RLE.)
 
-**Improving the ratio without losing the bound (`beeb/COMPRESSION_REPORT.md`).** A revised token
+**Improving the ratio without losing the bound (`COMPRESSION_REPORT.md`).** A revised token
 format ("v2": offset-1 RUN token + single-byte extended length + optimal parse, `-D VGI2=1`)
 cuts the corpus `.vgi` **8.3%** (1.52× → **1.40×** `.vgc`) with the per-frame distribution
 unchanged (p50/p90/p99 identical; worst frame 2787 → 3064 = 7.7% of a frame, still < ⅔ of VGC's

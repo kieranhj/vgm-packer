@@ -49,16 +49,16 @@ On a busy frame (11 decodes) the swap alone is **11 × 164 ≈ 1800 cycles** —
 the main driver of the 5638-cycle spikes, i.e. of the *variance*, not just the
 mean.
 
-## Implemented (`beeb/vgc/`, measured)
+## Implemented (`bench/vgc/`, measured)
 
-The context-swap fix is **done and verified**. `beeb/vgc/vgcplayer_opt.asm` keeps
+The context-swap fix is **done and verified**. `bench/vgc/vgcplayer_opt.asm` keeps
 each stream's LZ state **resident** instead of swapping it through ZP per byte:
 X holds the stream index for the whole decode; literal/match counts are accessed
 `abs,X` in place; the window buffer is `abs,Y` with its page self-modified once
 per decode and the read/write indices `inc`-ed in place; the window fetch/store
 are inlined (no JSR); only the stream read pointer is loaded once and saved once;
 and because `get_register_data` now preserves X, the `vgm_temp` save/restore is
-gone. `beeb/vgc/measure.py` checks the SN76489 output is **byte-identical** to
+gone. `bench/vgc/measure.py` checks the SN76489 output is **byte-identical** to
 the original and times both.
 
 Measured (Ghost House, 2559 frames; confirmed byte-exact on evil-influences and

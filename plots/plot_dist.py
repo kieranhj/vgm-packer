@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # plot_dist.py - visualise the per-frame cycle-cost distribution from the data
-# captured by bench_all.py (beeb/_cache/bench_costs.pkl). Produces a 2-panel PNG:
+# captured by bench_all.py (bench/_cache/bench_costs.pkl). Produces a 2-panel PNG:
 #   (top)    corpus-wide histogram of per-frame decode cost, incremental vs VGC
 #   (bottom) per-frame cost over a window of one busy tune, to show whether the
 #            VGC spikes are isolated or recurring.
@@ -14,7 +14,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-PKL = os.path.join(HERE, "_cache", "bench_costs.pkl")
+PKL = os.path.join(HERE, "..", "bench", "_cache", "bench_costs.pkl")
 OUT = os.path.join(HERE, "frame_cost_distribution.png")
 
 INCR_C = "#1f77b4"

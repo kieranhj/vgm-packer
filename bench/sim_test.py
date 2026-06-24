@@ -15,7 +15,7 @@ from py65.devices.mpu6502 import MPU
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-from pack_vgi import build_columns      # noqa: E402
+from vgipacker import build_columns      # noqa: E402
 
 VGM = os.path.join(os.path.dirname(HERE), "vgm", "Ghost House (Tobikomi Remix).bbc.vgm")
 KFRAMES = 512

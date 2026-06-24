@@ -5,7 +5,7 @@
 #   opt      v1 format but OPTIMAL parse - decoder is byte-for-byte identical,
 #            so this is a pure free win (same runtime)
 #   v2       new format: offset-1 RUN token + extended length + optimal parse
-#   .vgc     existing VGC (LZ4) for reference (from beeb/_cache)
+#   .vgc     existing VGC (LZ4) for reference (from bench/_cache)
 import os
 import sys
 import glob
@@ -13,7 +13,7 @@ import io
 import contextlib
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import pack_vgi as v1
+import vgipacker as v1
 import explore_vgi as ex
 
 CACHE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_cache")

@@ -31,7 +31,7 @@ RETSENT = 0x9000
 BUDGET = 2_000_000 // 50
 
 sys.path.insert(0, HERE)
-from pack_vgi import pack as pack_vgi    # noqa: E402
+from vgipacker import pack as pack_vgi    # noqa: E402
 
 
 def sh(cmd, cwd=None):

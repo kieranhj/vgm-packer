@@ -1,7 +1,7 @@
 # Incremental-decode SN76489 player (BBC Micro) — §12.4 prototype
 
 A 6502 prototype for the **single-bank, bounded-worst-case** regime in
-`docs/compression-analysis.md` §12.4: compressed music + code in one place, a
+`compression-analysis.md` §12.4: compressed music + code in one place, a
 known per-frame cost, and **no runtime bulk decompression**.
 
 It validates the core claim — that a byte-aligned per-column LZSS can be
@@ -10,7 +10,7 @@ single frame and the per-frame cost is bounded *independently of match length*.
 
 > **The packer and player now default to the "v2" format** (offset-1 RUN token +
 > extended length + optimal parse): ~8.3% smaller than the original v1 with the
-> per-frame decode distribution unchanged. `pack_vgi.py` emits v2 (use `--v1` for
+> per-frame decode distribution unchanged. `vgipacker.py` emits v2 (use `--v1` for
 > the original); the player is built with `-D VGI2=1`. Full study in
 > `COMPRESSION_REPORT.md`. The tables below labelled "incremental"/"v1" are the
 > original baseline; v2 is 8.3% smaller for the same runtime profile.
@@ -98,10 +98,10 @@ coloured band = that player's per-frame CPU time. A different colour per player:
 Run them in jsbeeb (Model B) — open all four to compare the band heights; VGC's
 band jitters frame-to-frame (RLE spikes), the VGI bands sit nearly still:
 
-- VGI looped:   https://bbc.xania.org/?autoboot&disc1=https://raw.githubusercontent.com/kieranhj/vgm-packer/player/beeb/raster_vgi.ssd
-- VGI unrolled: https://bbc.xania.org/?autoboot&disc1=https://raw.githubusercontent.com/kieranhj/vgm-packer/player/beeb/raster_vgi_unroll.ssd
-- VGC original: https://bbc.xania.org/?autoboot&disc1=https://raw.githubusercontent.com/kieranhj/vgm-packer/player/beeb/raster_vgc.ssd
-- VGC-opt:      https://bbc.xania.org/?autoboot&disc1=https://raw.githubusercontent.com/kieranhj/vgm-packer/player/beeb/raster_vgcopt.ssd
+- VGI looped:   https://bbc.xania.org/?autoboot&disc1=https://raw.githubusercontent.com/kieranhj/vgm-packer/vgi-experiment/discs/raster_vgi.ssd
+- VGI unrolled: https://bbc.xania.org/?autoboot&disc1=https://raw.githubusercontent.com/kieranhj/vgm-packer/vgi-experiment/discs/raster_vgi_unroll.ssd
+- VGC original: https://bbc.xania.org/?autoboot&disc1=https://raw.githubusercontent.com/kieranhj/vgm-packer/vgi-experiment/discs/raster_vgc.ssd
+- VGC-opt:      https://bbc.xania.org/?autoboot&disc1=https://raw.githubusercontent.com/kieranhj/vgm-packer/vgi-experiment/discs/raster_vgcopt.ssd
 
 Rebuild with `./build_raster.sh [path/to/tune.vgm]`.
 
@@ -133,44 +133,58 @@ File layout (little-endian, loaded as one blob):
 This flat (no-RLE) layout is intentionally simple for the prototype; it is a
 touch larger than VGC's RLE+LZ4 but trivially bounded to decode (see §8.9/P4f).
 
-## Files
+## Layout
 
-- `pack_vgi.py` — VGM → `.vgi` (v2 format by default; `--v1` for the original),
-  with self-verifying round-trips (a plain decoder and a faithful ring model).
-- `player.asm` — the 6502 player (BeebAsm). `-D TEST=1` builds a harness that
-  decodes into a buffer for the simulator; `-D TEST=0` builds the real, bootable
-  player. `-D VGI2=1` (default) decodes v2; `-D VGI2=0` decodes v1. `-D UNROLL=1`
-  builds the faster unrolled decoder (+~0.7 KB code); default `UNROLL=0` is the
-  compact looped build. (`UNROLL=1 ./build.sh` builds the unrolled disc.)
+This is an **experiment branch**. The clean, shipped distillations of this work
+live in pull requests: the packer is `vgipacker.py` (repo root; PR to
+vgm-packer) and the 6502 player is `lib/vgiplayer.asm` in the sibling
+vgm-player-bbc repo. What remains here is the R&D: the prototype player, the
+measurement harnesses, the plots and the design docs.
+
+**`vgipacker.py`** (repo root) — VGM → `.vgi` (v2 by default; `--v1` for the
+original), with self-verifying round-trips. The bench scripts import it.
+
+**`bench/`** — measurement & benchmark harnesses:
+
+- `player.asm` — the prototype 6502 player (BeebAsm). `-D TEST=1` builds a
+  harness that decodes into a buffer for the simulator; `-D TEST=0` builds the
+  real, bootable player. `-D VGI2=1` (default) decodes v2; `-D UNROLL=1` builds
+  the faster unrolled decoder (+~0.7 KB); default `UNROLL=0` is compact looped.
 - `sim_test.py` / `sim_test_player.py` / `measure_cycles.py` — py65 checks.
-- `sim_compare.py` / `sim_vgc.asm` — per-frame cycle comparison vs the existing
-  VGC player (needs a `vgm-player-bbc` checkout; see below).
-- `bench_all.py` / `plot_dist.py` — earlier VGI-vs-VGC size/footprint study.
-- `bench_players.py` / `plot_players.py` — current 4-player corpus benchmark
-  (VGI looped/unrolled, VGC original/opt) → `players_distribution.png`,
-  `players_timeseries.png`.
-- `vgc/` — vendored VGC player (`vgcplayer.asm`, by Simon Morris) + the optimised
-  `vgcplayer_opt.asm` + `measure.py`. See `VGC_OPTIMISATION_PLAN.md`.
-- `explore_vgi.py` / `measure_v2*.py` / `plot_v2.py` — the "v2" format study that
-  led to v2 becoming the default: 8.3% smaller for an unchanged decode profile.
-  See `COMPRESSION_REPORT.md`.
-- `build.sh` — pack, run all checks, build the disc.
-- `music.ssd` — bootable 200 KB disc (Ghost House, ~51 s, v2, looped decoder).
-- `music_unroll.ssd` — same tune with the faster unrolled decoder (`-D UNROLL=1`).
-- `OPTIMISATION_PLAN.md` — runtime cycle analysis and the optimisation tiers.
+- `sim_compare.py` / `sim_vgc.asm` — per-frame cycle comparison vs the VGC
+  player (needs a `vgm-player-bbc` checkout; see below).
+- `bench_all.py`, `bench_players.py`, `explore_vgi.py`, `measure_v2*.py`,
+  `measure_proposal*.py`, `analyse_registers.py`, ... — the corpus studies.
+  Cached results land in `bench/_cache/` (git-ignored).
+- `bench/vgc/` — the VGC comparison harness (`sim.asm` / `raster_vgc.asm` /
+  `measure.py`). The VGC players are **not** vendored here any more; the asm
+  `INCLUDE`s them from the sibling `../../../vgm-player-bbc/lib/` (the optimised
+  one needs that repo's `vgc-opt-player` branch). See `VGC_OPTIMISATION_PLAN.md`.
+- `build.sh` — pack, run all checks, build the disc (→ `discs/music.ssd`).
+- `build_raster.sh` — build the four raster-timing discs (→ `discs/`).
+
+**`plots/`** — `plot_dist.py`, `plot_players.py`, `plot_v2.py` (read
+`bench/_cache/*.pkl`) and their `.png` outputs.
+
+**`discs/`** — bootable disc images: `music.ssd` (Ghost House, looped),
+`music_unroll.ssd` (unrolled), and the four `raster_*.ssd` timing discs.
+
+**`docs/`** — this file plus `compression-analysis.md`, `COMPRESSION_REPORT.md`,
+`OPTIMISATION_PLAN.md`, `VGC_OPTIMISATION_PLAN.md`.
 
 ## Build / test
 
 Needs [BeebAsm](https://github.com/stardot/beebasm) and `pip install py65`.
-From this directory (set `BEEBASM` if it isn't on `PATH`):
+From the `bench/` directory (set `BEEBASM` if it isn't on `PATH`):
 
 ```sh
+cd bench
 ./build.sh                                   # default tune (Ghost House)
 ./build.sh "../vgm/U_LOADER.vgm"             # any SN76489 VGM in the corpus
 ```
 
 `build.sh` packs the tune, runs the three simulation checks, and writes
-`music.ssd`.
+`discs/music.ssd`.
 
 ## Running on a BBC (or emulator)
 

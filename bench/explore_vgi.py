@@ -22,7 +22,7 @@ import contextlib
 from collections import defaultdict
 
 sys.path.insert(0, ".")
-from pack_vgi import build_columns
+from vgipacker import build_columns
 
 VGC_TOTAL = 80108          # corpus .vgc (plain LZ4) for reference
 FRAME_OVH = 6              # bytes of per-stream framing (offset table entry etc.)
@@ -303,7 +303,7 @@ VARIANTS = [
 def main():
     files = sorted(glob.glob("../vgm/*.vgm"))
     # baseline greedy (from pack_vgi) for reference
-    from pack_vgi import lzss_encode
+    from vgipacker import lzss_encode
     base_total = 0
     cache11 = {}
     for f in files:

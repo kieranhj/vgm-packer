@@ -12,7 +12,7 @@ import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import bench_all as B
-import pack_vgi as v1
+import vgipacker as v1
 
 HERE = B.HERE
 BEEBASM = B.BEEBASM
