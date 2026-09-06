@@ -30,7 +30,8 @@ while decoding *three fewer streams*, which lands it at 1.02-1.09× `.vgc` on
 three of the five tunes where both exist, 1.39× on one, and *ahead* of `.vgc`
 on the fifth (*Dead On Time*, 4,610 against 5,950). With the player measured
 (below) it is also faster than the `.vgc` player at both the mean and the worst
-frame. The companion player
+frame, which is why **v3 is what `vgipacker.py` emits by default** now that
+`lib/vgiplayer.asm` can read it. The companion player
 and the full playback-cost measurement live in the `vgm-player-bbc` repo
 (`lib/vgiplayer.asm`, `docs/vgi-player.md`).
 
@@ -80,7 +81,7 @@ state.
                   copy `length` bytes from (head - offset) in the ring
 ```
 
-### v2 — the default (`vgipacker.py` emits this unless `--v1`)
+### v2 — the token format all three versions share (`--v2` for 11 raw columns)
 
 ```
 0LLLLLLL          literal run, L+1 literal bytes follow              (1..128)
@@ -106,7 +107,7 @@ and the start of any token reads at most `cmd + ext + offset = 3 bytes`. That
 cap is the reason the worst-case frame barely moves between v1 and v2. v2 also
 uses an **optimal (dynamic-programming) parse** rather than greedy.
 
-## v3 — indexed tone periods (`--v3`)
+## v3 — indexed tone periods (the default)
 
 v3 keeps the v2 token stream **exactly**. What changes is which columns exist,
 and it is worth **21.5–28.6% of the file** while making the player *cheaper*,
@@ -318,10 +319,13 @@ default.
 ## Usage
 
 ```
-python vgipacker.py "song.vgm" -o "song.vgi"      # v2 (default)
+python vgipacker.py "song.vgm" -o "song.vgi"      # v3 (default)
+python vgipacker.py "song.vgm" -o "song.vgi" --v2 # 11 raw register columns
 python vgipacker.py "song.vgm" -o "song.vgi" --v1 # original greedy format
-python vgipacker.py "song.vgm" -o "song.vgi" --v3 # indexed tone periods
 ```
+
+A player build reads one version and refuses the other at mount, so pack what
+your player was built for: `-D VGI_V3=1` for v3, `=0` for v2.
 
 Run from the repo root (it imports the `modules/` package, like `vgmpacker.py`).
 Only SN76489 PSG VGM files are supported.

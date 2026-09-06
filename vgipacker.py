@@ -27,9 +27,10 @@
 #
 # Only SN76489 PSG VGM files are supported (same constraint as vgmpacker.py).
 #
-# FORMAT (default "v2"; --v1 the original greedy format, --v3 indexed periods)
+# FORMAT (default "v3"; --v2 for 11 raw columns, --v1 the original greedy one)
 # ---------------------------------------------------------------------------
-# 11 register columns (one per SN76489 register), each compressed independently
+# v1 and v2 are 11 register columns (one per SN76489 register), each compressed
+# independently
 # with a byte-aligned LZSS over a 256-byte ring window (8-bit offsets). The
 # noise column keeps the 0x0f "skip" marker so the LFSR is not reset on
 # unchanged frames. Each column decodes to exactly nframes bytes (no end
@@ -55,7 +56,8 @@
 # and a token start reads at most cmd+ext+offset = 3 bytes - that is what keeps
 # the worst case bounded. v2 uses an optimal (DP) parse.
 #
-# v3 (--v3) keeps the v2 tokens and changes the COLUMNS: the tone lo/hi pair
+# v3 (THE DEFAULT since the 6502 player learned to read it) keeps the v2 tokens
+# and changes the COLUMNS: the tone lo/hi pair
 # becomes ONE column of indices into a table of the periods the tune uses, so
 # there are 8 columns and not 11. It is 21-29% smaller AND cheaper to decode
 # (three fewer per-stream state machines, three fewer ring pages), because the
@@ -78,7 +80,10 @@
 # come out byte-for-byte as v2 would have written them.
 #
 # Usage:
-#   python vgipacker.py <in.vgm> [-o out.vgi] [--v1 | --v3]
+#   python vgipacker.py <in.vgm> [-o out.vgi] [--v3 | --v2 | --v1]
+#
+# A player build reads ONE version (-D VGI_V3=1 or 0 in vgm-player-bbc) and
+# refuses the other at mount, so pack what your player was built for.
 #
 # Run from the repo root (it imports the modules/ package, like vgmpacker.py).
 
@@ -610,10 +615,11 @@ def pack_v3(vgm_path, out_path):
     return data, nf
 
 
-def pack(vgm_path, out_path, version=2):
-    """Pack a VGM to .vgi. version=2 (default) = optimal RUN+extlen format;
-    version=1 = the original greedy LZSS (kept for reference/comparison);
-    version=3 = v2 tokens over 8 columns, with the tone periods indexed."""
+def pack(vgm_path, out_path, version=3):
+    """Pack a VGM to .vgi. version=3 (default) = v2's tokens over 8 columns,
+    with each channel's tone period indexed into a table; version=2 = 11 raw
+    register columns; version=1 = the original greedy LZSS, kept for
+    reference."""
     if version == 3:
         return pack_v3(vgm_path, out_path)
     cols, nf, rate = build_columns(vgm_path)
@@ -660,14 +666,17 @@ def main():
         description="Pack an SN76489 VGM into the .vgi incremental-decode format.")
     ap.add_argument("input", help="input .vgm/.vgz file")
     ap.add_argument("-o", "--output", help="output .vgi (default: <input>.vgi)")
-    ap.add_argument("-1", "--v1", action="store_true",
-                    help="emit the original greedy v1 format instead of v2")
     ap.add_argument("-3", "--v3", action="store_true",
-                    help="emit v3: 8 columns with the tone periods indexed "
-                         "(23-29%% smaller, but needs a v3-aware player)")
+                    help="emit v3 (the default; the flag is accepted so a "
+                         "build script can say what it means)")
+    ap.add_argument("-2", "--v2", action="store_true",
+                    help="emit v2: 11 raw register columns, for a player built "
+                         "without v3 support")
+    ap.add_argument("-1", "--v1", action="store_true",
+                    help="emit the original greedy v1 format")
     args = ap.parse_args()
     out = args.output or (os.path.splitext(args.input)[0] + ".vgi")
-    version = 1 if args.v1 else (3 if args.v3 else 2)
+    version = 1 if args.v1 else (2 if args.v2 else 3)
     pack(args.input, out, version=version)
 
 

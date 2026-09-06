@@ -71,18 +71,22 @@ profile* on the 6502:
   independently of match/run length** — low, flat and predictable. v1 and v2 are
   ~1.4× the size of `.vgc`; that is the price of dropping the RLE layer that
   causes the spikes.
-* **`.vgi` v3** (`--v3`) keeps v2's tokens and indexes each channel's tone
-  period into a table, so there are 8 columns instead of 11. It is **21.5-28.6%
-  smaller than v2** over nine tunes, decodes **three fewer streams** (~150
-  cycles a frame) and needs **three fewer ring pages** (2,816 → 2,048 bytes) —
-  roughly `.vgc`'s size with `.vgi`'s bounded worst frame. It needs a v3-aware
-  player, which is why v2 is still the default.
+* **`.vgi` v3** (**the default**) keeps v2's tokens and indexes each channel's
+  tone period into a table, so there are 8 columns instead of 11. It is
+  **21.5-28.6% smaller than v2** over ten tunes, decodes **three fewer streams**
+  and needs **three fewer ring pages** (2,816 → 2,048 bytes) — and with the
+  6502 player measured, it beats the stock `.vgc` player at both the mean
+  (985 cycles against 1788) and the worst frame (1894 against 5321), on a file
+  about `.vgc`'s size.
 
 ```
-python vgipacker.py music.vgm -o music.vgi      # v2 format (default)
+python vgipacker.py music.vgm -o music.vgi      # v3 format (default)
+python vgipacker.py music.vgm -o music.vgi --v2 # 11 raw register columns
 python vgipacker.py music.vgm -o music.vgi --v1 # original greedy format
-python vgipacker.py music.vgm -o music.vgi --v3 # indexed tone periods
 ```
+
+A player build reads one version and refuses the other at mount, so pack what
+your player was built for (`-D VGI_V3=1` or `=0`).
 
 The format (token encoding, file layout, self-verification) and the full corpus
 size comparison are documented in [`docs/vgi-format.md`](docs/vgi-format.md).
