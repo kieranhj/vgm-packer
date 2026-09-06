@@ -27,7 +27,7 @@
 #
 # Only SN76489 PSG VGM files are supported (same constraint as vgmpacker.py).
 #
-# FORMAT (default "v2"; --v1 emits the original greedy format for comparison)
+# FORMAT (default "v2"; --v1 the original greedy format, --v3 indexed periods)
 # ---------------------------------------------------------------------------
 # 11 register columns (one per SN76489 register), each compressed independently
 # with a byte-aligned LZSS over a 256-byte ring window (8-bit offsets). The
@@ -35,7 +35,7 @@
 # unchanged frames. Each column decodes to exactly nframes bytes (no end
 # marker). File layout (little-endian, loaded as one blob):
 #
-#   +0   'V','G','I',ver        magic + version (1 or 2)
+#   +0   'V','G','I',ver        magic + version (1 or 2; v3 is below)
 #   +4   nframes (16-bit)
 #   +6   11 x stream offset (16-bit, relative to file start)
 #   +28  the 11 LZSS streams, concatenated
@@ -55,12 +55,29 @@
 # and a token start reads at most cmd+ext+offset = 3 bytes - that is what keeps
 # the worst case bounded. v2 uses an optimal (DP) parse.
 #
-# Both formats are SELF-VERIFIED here: every encoded column is decoded by two
+# v3 (--v3) keeps the v2 tokens and changes the COLUMNS: the tone lo/hi pair
+# becomes ONE column of indices into a table of the periods the tune uses, so
+# there are 8 columns and not 11. It is 23-29% smaller AND cheaper to decode
+# (three fewer per-stream state machines, three fewer ring pages), because the
+# SN's 4+6 period split puts entropy in both halves where the AY's 8+4 leaves
+# one half nearly static - see docs/vgi-format.md for the measurement that
+# found it. Its layout:
+#
+#   +0   'V','G','I',3
+#   +4   nframes (16-bit)
+#   +6   8 x stream offset (16-bit, relative to file start)
+#   +22  table mode (byte: 1 = one shared table, 3 = one per channel)
+#   +23  3 x table offset (16-bit); +29 3 x entry count (byte, 0 = 256)
+#   +32  the tables (N low nibbles then N high 6-bit values), then the streams
+#
+# Every format is SELF-VERIFIED here: each encoded column is decoded by two
 # independent reference decoders (a plain one and a 256-byte-ring model of the
-# 6502 routine) and asserted to round-trip exactly.
+# 6502 routine) and asserted to round-trip exactly. v3 additionally expands its
+# indices back through the tables and asserts the 11 SN76489 register columns
+# come out byte-for-byte as v2 would have written them.
 #
 # Usage:
-#   python vgipacker.py <in.vgm> [-o out.vgi] [--v1]
+#   python vgipacker.py <in.vgm> [-o out.vgi] [--v1 | --v3]
 #
 # Run from the repo root (it imports the modules/ package, like vgmpacker.py).
 
@@ -423,9 +440,186 @@ def v2_decode_ring(blob, nout):
     return bytes(out[:nout])
 
 
+# ===========================================================================
+# v3 columns - the same v2 tokens over fewer, quieter streams.
+#
+# The tone columns stop being "low nibble" and "high 6 bits" and become ONE
+# column of indices into a table of the periods the tune actually uses. Why
+# that is worth 23-29% of the file, and why it also costs FEWER cycles to
+# decode, is in docs/vgi-format.md.
+# ===========================================================================
+V3_HEADER = 4 + 2 + 8 * 2 + 1 + 3 * 2 + 3       # 32 bytes
+
+
+def periods(cols, chan):
+    """The 10-bit tone period of `chan` per frame, from the v2 lo/hi columns."""
+    lo, hi = cols[2 * chan], cols[2 * chan + 1]
+    out = []
+    for i in range(len(lo)):
+        assert lo[i] <= 0x0f and hi[i] <= 0x3f, "unexpected tone column value"
+        out.append(lo[i] | (hi[i] << 4))
+    return out
+
+
+def build_v3(cols):
+    """(8 columns, tables, mode) for the v2 columns of one tune.
+
+    mode 1 = one table shared by all three channels, used whenever the union of
+    their periods fits a byte index - it is then always the smaller table, and
+    the stream sizes are identical either way, because a per-column LZ matches
+    exact repeats and cannot see a relabelling of the alphabet.
+    mode 3 = one table per channel, for tunes whose union overflows.
+    """
+    per = [periods(cols, k) for k in range(3)]
+    union = sorted(set(v for p in per for v in p))
+    if len(union) <= 256:
+        mode, tables = 1, [union]
+        maps = [{v: i for i, v in enumerate(union)}] * 3
+    else:
+        mode, tables = 3, [sorted(set(p)) for p in per]
+        for k, t in enumerate(tables):
+            if len(t) > 256:
+                raise ValueError(
+                    "channel %d uses %d distinct periods and a byte index "
+                    "cannot address them - pack this tune as v2" % (k, len(t)))
+        maps = [{v: i for i, v in enumerate(t)} for t in tables]
+
+    scols = [bytearray(maps[k][v] for v in per[k]) for k in range(3)]
+    scols.append(bytearray(cols[NOISE_COL]))
+    scols += [bytearray(cols[c]) for c in range(7, 11)]
+    return scols, tables, mode
+
+
+def v3_expand(scols, tables, mode):
+    """8 v3 columns + tables -> the 11 v2 columns.
+
+    This is exactly what the player does with two table lookups per channel,
+    and it is what the packer asserts against before writing a file: a v3 file
+    must drive the SN76489 with the byte-for-byte stream a v2 file would.
+    """
+    tabs = (tables * 3) if mode == 1 else tables
+    cols = [None] * 11
+    for k in range(3):
+        t = tabs[k]
+        cols[2 * k] = bytearray(t[i] & 0x0f for i in scols[k])
+        cols[2 * k + 1] = bytearray((t[i] >> 4) & 0x3f for i in scols[k])
+    cols[NOISE_COL] = bytearray(scols[3])
+    for c in range(4):
+        cols[7 + c] = bytearray(scols[4 + c])
+    return cols
+
+
+def serialise_tables(tables):
+    """Each table as N low-nibble bytes then N high-6-bit bytes.
+
+    The latch bits are NOT baked in: the player ORs #&80/&a0/&c0 as it already
+    does, which costs 2 cycles and keeps one shared table legal for all three
+    channels instead of forcing three.
+    """
+    out = bytearray()
+    for t in tables:
+        out += bytes(v & 0x0f for v in t)
+        out += bytes((v >> 4) & 0x3f for v in t)
+    return bytes(out)
+
+
+def read_v3(blob):
+    """Parse a v3 file back into (8 columns, tables, mode, nframes).
+
+    Reading the file the way a player would is the only thing that checks the
+    HEADER - the round-trip asserts inside the packer never touch it.
+    """
+    u16 = lambda o: blob[o] | (blob[o + 1] << 8)
+    assert blob[:4] == b"VGI\x03", "not a v3 .vgi"
+    nf = u16(4)
+    soff = [u16(6 + 2 * i) for i in range(8)]
+    mode = blob[22]
+    toff = [u16(23 + 2 * k) for k in range(3)]
+    counts = [blob[29 + k] or 256 for k in range(3)]
+
+    tables = []
+    for k in range(3 if mode == 3 else 1):
+        n, o = counts[k], toff[k]
+        tables.append([blob[o + i] | (blob[o + n + i] << 4) for i in range(n)])
+    scols = [v2_decode_ring(blob[soff[i]:], nf) for i in range(8)]
+    return scols, tables, mode, nf
+
+
+def pack_v3(vgm_path, out_path):
+    """Pack a VGM to .vgi v3: 8 columns, v2 tokens, plus the period tables."""
+    cols, nf, rate = build_columns(vgm_path)
+    scols, tables, mode = build_v3(cols)
+
+    blobs = []
+    for c, col in enumerate(scols):
+        data = bytes(col)
+        blob = v2_encode(data)
+        assert v2_decode(blob, nf) == data, "v3 round-trip failed col %d" % c
+        assert v2_decode_ring(blob, nf) == data, "v3 ring round-trip failed col %d" % c
+        blobs.append(blob)
+
+    # The check that matters: the chip sees what v2 would have made it see.
+    back = v3_expand([v2_decode_ring(b, nf) for b in blobs], tables, mode)
+    for c in range(11):
+        assert bytes(back[c]) == bytes(cols[c]), \
+            "v3 does not reproduce register column %d" % c
+
+    tbl_blob = serialise_tables(tables)
+    tbl_off = [V3_HEADER] * 3
+    if mode == 3:
+        o = V3_HEADER
+        for k in range(3):
+            tbl_off[k] = o
+            o += 2 * len(tables[k])
+
+    header = bytearray(b"VGI\x03")
+    header += bytes((nf & 0xff, (nf >> 8) & 0xff))
+    off = V3_HEADER + len(tbl_blob)
+    for b in blobs:
+        header += bytes((off & 0xff, (off >> 8) & 0xff))
+        off += len(b)
+    header.append(mode)
+    for o in tbl_off:
+        header += bytes((o & 0xff, (o >> 8) & 0xff))
+    for k in range(3):
+        t = tables[0] if mode == 1 else tables[k]
+        header.append(len(t) & 0xff)                 # 0 means 256
+    assert len(header) == V3_HEADER
+
+    data = bytes(header) + tbl_blob + b"".join(blobs)
+
+    # ... and read the finished file back the way the player will, which is the
+    # only check that covers the header.
+    rcols, rtables, rmode, rnf = read_v3(data)
+    assert rnf == nf and rmode == mode, "v3 header round-trip failed"
+    for c in range(11):
+        assert bytes(v3_expand(rcols, rtables, rmode)[c]) == bytes(cols[c]), \
+            "v3 file does not reproduce register column %d" % c
+
+    if out_path:
+        with open(out_path, "wb") as fh:
+            fh.write(data)
+
+    total = len(data)
+    print("packed %s  (v3)" % os.path.basename(vgm_path))
+    print("  frames   : %d  (%d Hz, ~%.1f s)" % (nf, rate, nf / float(rate or 50)))
+    print("  periods  : %s  (%s)"
+          % ("/".join(str(len(set(periods(cols, k)))) for k in range(3)),
+             "one shared table" if mode == 1 else "a table per channel"))
+    print("  per-stream bytes: %s" % " ".join(str(len(b)) for b in blobs))
+    print("  total .vgi: %d bytes (header %d + tables %d + streams %d)"
+          % (total, V3_HEADER, len(tbl_blob), total - V3_HEADER - len(tbl_blob)))
+    if out_path:
+        print("  -> %s" % out_path)
+    return data, nf
+
+
 def pack(vgm_path, out_path, version=2):
     """Pack a VGM to .vgi. version=2 (default) = optimal RUN+extlen format;
-    version=1 = the original greedy LZSS (kept for reference/comparison)."""
+    version=1 = the original greedy LZSS (kept for reference/comparison);
+    version=3 = v2 tokens over 8 columns, with the tone periods indexed."""
+    if version == 3:
+        return pack_v3(vgm_path, out_path)
     cols, nf, rate = build_columns(vgm_path)
     blobs = []
     for c in range(11):
@@ -472,9 +666,13 @@ def main():
     ap.add_argument("-o", "--output", help="output .vgi (default: <input>.vgi)")
     ap.add_argument("-1", "--v1", action="store_true",
                     help="emit the original greedy v1 format instead of v2")
+    ap.add_argument("-3", "--v3", action="store_true",
+                    help="emit v3: 8 columns with the tone periods indexed "
+                         "(23-29%% smaller, but needs a v3-aware player)")
     args = ap.parse_args()
     out = args.output or (os.path.splitext(args.input)[0] + ".vgi")
-    pack(args.input, out, version=1 if args.v1 else 2)
+    version = 1 if args.v1 else (3 if args.v3 else 2)
+    pack(args.input, out, version=version)
 
 
 if __name__ == "__main__":

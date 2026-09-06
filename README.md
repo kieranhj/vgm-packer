@@ -68,13 +68,20 @@ profile* on the 6502:
   **spikes** (cheap RLE-counter frames, occasional expensive LZ4 refills).
 * `.vgi` runs a tiny byte-aligned **LZSS per register column with no RLE**,
   decoded **one value per stream per frame**, so the per-frame cost is **bounded
-  independently of match/run length** — low, flat and predictable. It is ~1.4×
-  the size of `.vgc`; that is the price of dropping the RLE layer that causes
-  the spikes.
+  independently of match/run length** — low, flat and predictable. v1 and v2 are
+  ~1.4× the size of `.vgc`; that is the price of dropping the RLE layer that
+  causes the spikes.
+* **`.vgi` v3** (`--v3`) keeps v2's tokens and indexes each channel's tone
+  period into a table, so there are 8 columns instead of 11. It is **21.5-28.7%
+  smaller than v2** over nine tunes, decodes **three fewer streams** (~150
+  cycles a frame) and needs **three fewer ring pages** (2,816 → 2,048 bytes) —
+  roughly `.vgc`'s size with `.vgi`'s bounded worst frame. It needs a v3-aware
+  player, which is why v2 is still the default.
 
 ```
 python vgipacker.py music.vgm -o music.vgi      # v2 format (default)
 python vgipacker.py music.vgm -o music.vgi --v1 # original greedy format
+python vgipacker.py music.vgm -o music.vgi --v3 # indexed tone periods
 ```
 
 The format (token encoding, file layout, self-verification) and the full corpus
