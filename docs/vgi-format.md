@@ -25,10 +25,12 @@ has to do per frame**.
 That predictability is the whole point: a raster-budgeted demo cares about the
 *worst* frame, not the average. `.vgi` v1 and v2 trade a little size (~1.4×
 `.vgc` on the corpus, below) for a per-frame cost with almost no tail. **v3
-mostly buys that size back**: it is 21.5-28.7% smaller than v2 over nine tunes
+mostly buys that size back**: it is 21.5-28.6% smaller than v2 over ten tunes
 while decoding *three fewer streams*, which lands it at 1.02-1.09× `.vgc` on
-four of the five tunes where both exist, and ahead of `.vgc` on the fifth
-(*Dead On Time*, 4,608 against 5,950). The companion player
+three of the five tunes where both exist, 1.39× on one, and *ahead* of `.vgc`
+on the fifth (*Dead On Time*, 4,610 against 5,950). With the player measured
+(below) it is also faster than the `.vgc` player at both the mean and the worst
+frame. The companion player
 and the full playback-cost measurement live in the `vgm-player-bbc` repo
 (`lib/vgiplayer.asm`, `docs/vgi-player.md`).
 
@@ -107,8 +109,8 @@ uses an **optimal (dynamic-programming) parse** rather than greedy.
 ## v3 — indexed tone periods (`--v3`)
 
 v3 keeps the v2 token stream **exactly**. What changes is which columns exist,
-and it is worth **23–29% of the file** while making the player *cheaper*, not
-dearer.
+and it is worth **21.5–28.6% of the file** while making the player *cheaper*,
+not dearer.
 
 ### Why: the split is in the wrong place
 
@@ -147,15 +149,17 @@ chip wants. The latch bits are **not** baked in — the player still ORs
 `#&80/&a0/&c0` as it does today, which costs 2 cycles and lets all three
 channels share one table.
 
-**Table mode 1** is one table shared by the three channels, used whenever the
-union of their periods fits a byte index; it is then always the smaller table,
-and the streams are byte-for-byte the same size either way. (A per-column LZ
-matches *exact repeats*, so relabelling the alphabet cannot change what it
-finds — measured identical, 3,007 and 9,192 bytes both ways, on two tunes.)
-**Table mode 3** is one table per channel, for tunes whose union overflows 256 —
-`Targhan - Crtc` needs it, at 153/161/187 distinct periods for a union of 272.
-If a single channel ever exceeded 256, the packer refuses the tune and says to
-pack it as v2; none of the nine tunes measured comes close.
+The three channels **share one table** whenever the union of their periods fits
+a byte index; it is then always the smaller table, and the streams are
+byte-for-byte the same size either way. (A per-column LZ matches *exact
+repeats*, so relabelling the alphabet cannot change what it finds — measured
+identical, 3,007 and 9,192 bytes both ways, on two tunes.) Otherwise each
+channel gets its own — `Targhan - Crtc` needs that, at 153/161/187 distinct
+periods for a union of 272. **The player never has to know which happened**:
+the header names a low and a high table per channel, and a shared table is
+simply the same offsets repeated. If a single channel ever exceeded 256 the
+packer refuses the tune and says to pack it as v2; none of the ten tunes
+measured comes close.
 
 ### File layout (little-endian, loaded as one blob)
 
@@ -163,37 +167,58 @@ pack it as v2; none of the nine tunes measured comes close.
 +0   'V','G','I',3
 +4   nframes (16-bit)
 +6   8 x stream offset (16-bit, relative to file start)
-+22  table mode (byte: 1 = one shared table, 3 = one per channel)
-+23  3 x table offset (16-bit, relative to file start; all equal when mode 1)
-+29  3 x table entry count (byte; 0 means 256)
-+32  the tables, then the 8 LZSS streams
++22  6 x table offset (16-bit, relative to file start): low table then high
+     table, per channel. Channels sharing a table simply repeat its offsets.
++34  the tables, then the 8 LZSS streams
 ```
 
-Each table is `N` low-nibble bytes followed by `N` high-6-bit bytes, so a
-channel's two lookup bases are `table_offset` and `table_offset + N`.
+Each table is `N` low-nibble bytes followed by `N` high-6-bit bytes, and the
+header names **both halves outright** rather than a base and a count. That is
+what keeps the player's mount to "add the load address, store": no arithmetic,
+no entry count, and no shared-versus-per-channel special case.
 
-### What the player does
+### What the player does — built and measured
 
-Per tone channel, one stream decode disappears and two indexed loads replace
-it:
+`lib/vgiplayer.asm` in the
+[vgm-player-bbc](https://github.com/simondotm/vgm-player-bbc) project builds for
+v3 with `-D VGI_V3=1`. Per tone channel, one stream decode disappears and two
+indexed loads replace it:
 
 ```
     VGI_DECODE_U 0          ; the period index
-    tax
-    lda tone0_lo,x : ora #&80 : jsr sn_write
-    lda tone0_hi,x :            jsr sn_write
+    tay                     ; sn_write clobbers X but never Y
+.v3_t0lo
+    lda &ffff,y : ora #&80 : jsr sn_write
+.v3_t0hi
+    lda &ffff,y :            jsr sn_write
 ```
 
-A steady-state `VGI_DECODE_U` is about **59 cycles** (`st_rem` test, `st_flag`
-test, ring read, two `inc`s, a `dec`, the `jmp`, plus the `inc vgi_ring+1`);
-the `tax` and two absolute-indexed loads are about **10**. Three channels, so
-roughly **150 cycles a frame off** a median measured at 1,149 (unrolled) to
-1,569 (looped) — call it 10%. The ring also drops from 11 pages to 8:
-**2,816 → 2,048 bytes**, which more than pays for the table.
+The six operands are poked with the biased table pointers at mount, so a lookup
+costs one `absolute,Y` read and nothing else. A steady-state `VGI_DECODE_U` is
+about **59 cycles**, and three of them go.
 
-`vgm_init` needs to read the new header: 8 stream offsets, the table mode, and
-the three table bases (biasing all of them by the load address as it already
-does for streams). The token decoder itself does not change at all.
+Measured over all 9,602 frames of `acid_demo` (`test/vgi/measure.py`, cycles at
+2 MHz, including the SN76489 writes):
+
+| player | min | mean | p99 | max |
+|---|--:|--:|--:|--:|
+| VGC (stock) | 294 | 1788 | 4022 | **5321** |
+| VGI v2 looped | 1483 | 1572 | 2219 | 2677 |
+| VGI v2 unrolled | 1052 | 1149 | 1863 | 2377 |
+| VGI v3 looped | 1214 | 1277 | 1762 | 2125 |
+| VGI v3 unrolled | 917 | **985** | 1511 | **1894** |
+
+So v3 is cheaper than v2 everywhere — 295 cycles at the mean and 552 at the
+worst frame for the looped build — and **VGI v3 unrolled beats the stock VGC
+player at both ends**, mean 985 against 1788 and worst frame 1894 against 5321,
+on a file about the same size. The ring also drops from 11 pages to 8,
+**2,816 → 2,048 bytes**, and the unrolled v3 player is 46 bytes *smaller* than
+unrolled v2.
+
+`vgm_init` reads the new header — 8 stream offsets and 6 table offsets, all
+biased by the load address — and checks the version byte so a v2 file handed to
+a v3 build is refused rather than played as noise. The token decoder does not
+change at all.
 
 ### Measured
 
@@ -205,17 +230,17 @@ SN76489 through `ym2sn.py` by `arkos-player-bbc/tools/compare_formats.py`.
 
 | tune | frames | v2 | v3 | |
 |---|--:|--:|--:|--:|
-| Androids (`example/`) | 8,835 | 11,551 | 8,447 | −26.9% |
-| BotB Slimeball - Fluid Dynamics | 4,458 | 9,314 | 7,314 | −21.5% |
-| Collision Chaos | 5,000 | 4,214 | 3,199 | −24.1% |
-| acid_demo | 9,602 | 12,587 | 9,421 | −25.2% |
-| ne7 - magic_beans | 6,976 | 9,267 | 6,874 | −25.8% |
-| Rhino - Acid Demo 21 | 9,602 | 10,069 | 7,716 | −23.4% |
-| Targhan - Dead On Time | 3,728 | 6,460 | 4,608 | −28.7% |
-| Tom&Jerry - Edge Grinder | 17,448 | 22,292 | 16,077 | −27.9% |
-| Targhan - Orion Prime L4 | 24,194 | 10,530 | 8,124 | −22.8% |
-| Targhan - Crtc | 11,591 | 28,043 | 21,436 | −23.6% |
-| **TOTAL** | | **124,327** | **93,216** | **−25.0%** |
+| Androids (`example/`) | 8,835 | 11,551 | 8,449 | −26.9% |
+| BotB Slimeball - Fluid Dynamics | 4,458 | 9,314 | 7,316 | −21.5% |
+| Collision Chaos | 5,000 | 4,214 | 3,201 | −24.0% |
+| acid_demo | 9,602 | 12,587 | 9,423 | −25.1% |
+| ne7 - magic_beans | 6,976 | 9,267 | 6,876 | −25.8% |
+| Rhino - Acid Demo 21 | 9,602 | 10,069 | 7,718 | −23.3% |
+| Targhan - Dead On Time | 3,728 | 6,460 | 4,610 | −28.6% |
+| Tom&Jerry - Edge Grinder | 17,448 | 22,292 | 16,079 | −27.9% |
+| Targhan - Orion Prime L4 | 24,194 | 10,530 | 8,126 | −22.8% |
+| Targhan - Crtc | 11,591 | 28,043 | 21,438 | −23.6% |
+| **TOTAL** | | **124,327** | **93,236** | **−25.0%** |
 
 The Slimeball, Collision Chaos and magic_beans v2 figures are the same ones in
 the corpus table below, so the two measurements agree where they overlap.

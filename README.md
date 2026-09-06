@@ -72,7 +72,7 @@ profile* on the 6502:
   ~1.4× the size of `.vgc`; that is the price of dropping the RLE layer that
   causes the spikes.
 * **`.vgi` v3** (`--v3`) keeps v2's tokens and indexes each channel's tone
-  period into a table, so there are 8 columns instead of 11. It is **21.5-28.7%
+  period into a table, so there are 8 columns instead of 11. It is **21.5-28.6%
   smaller than v2** over nine tunes, decodes **three fewer streams** (~150
   cycles a frame) and needs **three fewer ring pages** (2,816 → 2,048 bytes) —
   roughly `.vgc`'s size with `.vgi`'s bounded worst frame. It needs a v3-aware

@@ -57,7 +57,7 @@
 #
 # v3 (--v3) keeps the v2 tokens and changes the COLUMNS: the tone lo/hi pair
 # becomes ONE column of indices into a table of the periods the tune uses, so
-# there are 8 columns and not 11. It is 23-29% smaller AND cheaper to decode
+# there are 8 columns and not 11. It is 21-29% smaller AND cheaper to decode
 # (three fewer per-stream state machines, three fewer ring pages), because the
 # SN's 4+6 period split puts entropy in both halves where the AY's 8+4 leaves
 # one half nearly static - see docs/vgi-format.md for the measurement that
@@ -66,9 +66,10 @@
 #   +0   'V','G','I',3
 #   +4   nframes (16-bit)
 #   +6   8 x stream offset (16-bit, relative to file start)
-#   +22  table mode (byte: 1 = one shared table, 3 = one per channel)
-#   +23  3 x table offset (16-bit); +29 3 x entry count (byte, 0 = 256)
-#   +32  the tables (N low nibbles then N high 6-bit values), then the streams
+#   +22  6 x table offset (16-bit): low then high table, per channel. The
+#        three channels share one table when their periods fit one byte index,
+#        and the offsets simply repeat - the player has no special case.
+#   +34  the tables (N low nibbles then N high 6-bit values), then the streams
 #
 # Every format is SELF-VERIFIED here: each encoded column is decoded by two
 # independent reference decoders (a plain one and a 256-byte-ring model of the
@@ -448,7 +449,7 @@ def v2_decode_ring(blob, nout):
 # that is worth 23-29% of the file, and why it also costs FEWER cycles to
 # decode, is in docs/vgi-format.md.
 # ===========================================================================
-V3_HEADER = 4 + 2 + 8 * 2 + 1 + 3 * 2 + 3       # 32 bytes
+V3_HEADER = 4 + 2 + 8 * 2 + 6 * 2               # 34 bytes
 
 
 def periods(cols, chan):
@@ -490,14 +491,13 @@ def build_v3(cols):
     return scols, tables, mode
 
 
-def v3_expand(scols, tables, mode):
-    """8 v3 columns + tables -> the 11 v2 columns.
+def v3_expand(scols, tabs):
+    """8 v3 columns + one table per channel -> the 11 v2 columns.
 
     This is exactly what the player does with two table lookups per channel,
     and it is what the packer asserts against before writing a file: a v3 file
     must drive the SN76489 with the byte-for-byte stream a v2 file would.
     """
-    tabs = (tables * 3) if mode == 1 else tables
     cols = [None] * 11
     for k in range(3):
         t = tabs[k]
@@ -510,21 +510,24 @@ def v3_expand(scols, tables, mode):
 
 
 def serialise_tables(tables):
-    """Each table as N low-nibble bytes then N high-6-bit bytes.
+    """(blob, [(lo offset, hi offset) per table]) - each table as N low-nibble
+    bytes then N high-6-bit bytes, at offsets relative to the blob.
 
     The latch bits are NOT baked in: the player ORs #&80/&a0/&c0 as it already
     does, which costs 2 cycles and keeps one shared table legal for all three
     channels instead of forcing three.
     """
     out = bytearray()
+    where = []
     for t in tables:
+        where.append((len(out), len(out) + len(t)))
         out += bytes(v & 0x0f for v in t)
         out += bytes((v >> 4) & 0x3f for v in t)
-    return bytes(out)
+    return bytes(out), where
 
 
 def read_v3(blob):
-    """Parse a v3 file back into (8 columns, tables, mode, nframes).
+    """Parse a v3 file back into (8 columns, one table per channel, nframes).
 
     Reading the file the way a player would is the only thing that checks the
     HEADER - the round-trip asserts inside the packer never touch it.
@@ -533,16 +536,14 @@ def read_v3(blob):
     assert blob[:4] == b"VGI\x03", "not a v3 .vgi"
     nf = u16(4)
     soff = [u16(6 + 2 * i) for i in range(8)]
-    mode = blob[22]
-    toff = [u16(23 + 2 * k) for k in range(3)]
-    counts = [blob[29 + k] or 256 for k in range(3)]
+    toff = [(u16(22 + 4 * k), u16(24 + 4 * k)) for k in range(3)]
 
     tables = []
-    for k in range(3 if mode == 3 else 1):
-        n, o = counts[k], toff[k]
-        tables.append([blob[o + i] | (blob[o + n + i] << 4) for i in range(n)])
+    for lo, hi in toff:
+        n = hi - lo                       # the tables are adjacent, lo then hi
+        tables.append([blob[lo + i] | (blob[hi + i] << 4) for i in range(n)])
     scols = [v2_decode_ring(blob[soff[i]:], nf) for i in range(8)]
-    return scols, tables, mode, nf
+    return scols, tables, nf
 
 
 def pack_v3(vgm_path, out_path):
@@ -559,42 +560,37 @@ def pack_v3(vgm_path, out_path):
         blobs.append(blob)
 
     # The check that matters: the chip sees what v2 would have made it see.
-    back = v3_expand([v2_decode_ring(b, nf) for b in blobs], tables, mode)
+    tabs = (tables * 3) if mode == 1 else tables
+    back = v3_expand([v2_decode_ring(b, nf) for b in blobs], tabs)
     for c in range(11):
-        assert bytes(back[c]) == bytes(cols[c]), \
-            "v3 does not reproduce register column %d" % c
+        assert bytes(back[c]) == bytes(cols[c]),             "v3 does not reproduce register column %d" % c
 
-    tbl_blob = serialise_tables(tables)
-    tbl_off = [V3_HEADER] * 3
-    if mode == 3:
-        o = V3_HEADER
-        for k in range(3):
-            tbl_off[k] = o
-            o += 2 * len(tables[k])
+    # One table is serialised once even when all three channels share it; the
+    # header then just names the same offsets three times, so the player has
+    # one uniform case and no arithmetic to do.
+    tbl_blob, where = serialise_tables(tables)
+    if mode == 1:
+        where = where * 3
 
-    header = bytearray(b"VGI\x03")
+    header = bytearray(b"VGI")
     header += bytes((nf & 0xff, (nf >> 8) & 0xff))
     off = V3_HEADER + len(tbl_blob)
     for b in blobs:
         header += bytes((off & 0xff, (off >> 8) & 0xff))
         off += len(b)
-    header.append(mode)
-    for o in tbl_off:
-        header += bytes((o & 0xff, (o >> 8) & 0xff))
-    for k in range(3):
-        t = tables[0] if mode == 1 else tables[k]
-        header.append(len(t) & 0xff)                 # 0 means 256
+    for lo, hi in where:
+        for o in (V3_HEADER + lo, V3_HEADER + hi):
+            header += bytes((o & 0xff, (o >> 8) & 0xff))
     assert len(header) == V3_HEADER
 
     data = bytes(header) + tbl_blob + b"".join(blobs)
 
     # ... and read the finished file back the way the player will, which is the
     # only check that covers the header.
-    rcols, rtables, rmode, rnf = read_v3(data)
-    assert rnf == nf and rmode == mode, "v3 header round-trip failed"
+    rcols, rtables, rnf = read_v3(data)
+    assert rnf == nf, "v3 header round-trip failed"
     for c in range(11):
-        assert bytes(v3_expand(rcols, rtables, rmode)[c]) == bytes(cols[c]), \
-            "v3 file does not reproduce register column %d" % c
+        assert bytes(v3_expand(rcols, rtables)[c]) == bytes(cols[c]),             "v3 file does not reproduce register column %d" % c
 
     if out_path:
         with open(out_path, "wb") as fh:
